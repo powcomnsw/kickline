@@ -1,0 +1,4 @@
+target/
+dist/
+lumen_project.json
+.DS_Store

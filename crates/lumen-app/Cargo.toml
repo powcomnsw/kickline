@@ -1,0 +1,22 @@
+[package]
+name = "lumen-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lumen-core = { path = "../lumen-core" }
+lumen-fixtures = { path = "../lumen-fixtures" }
+lumen-output = { path = "../lumen-output" }
+lumen-audio = { path = "../lumen-audio" }
+serde.workspace = true
+serde_json.workspace = true
+eframe = "0.37"
+rusty_link = { version = "0.4", optional = true }
+if-addrs = "0.15"
+
+[features]
+default = ["link"]
+# Ableton Link tempo/beat sync. The Link library is GPL-2.0-or-later, so builds
+# with this feature are distributed under the GPL. Needs CMake to build.
+link = ["dep:rusty_link"]
