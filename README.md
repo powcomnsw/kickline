@@ -4,7 +4,21 @@ An open-source, Resolume-style VJ and lighting controller written in Rust.
 Clips on layers are composited into a canvas, the canvas is pixel-mapped onto
 patched DMX fixtures, and the result goes out over Art-Net or sACN.
 
-## Status: v0.4
+**Mac download:** [latest release](https://github.com/powcomnsw/lumen/releases/latest)
+(see [first launch](packaging/macos/INSTALL.txt)).
+
+![Lumen main window](docs/screenshots/main.png)
+
+| | |
+|---|---|
+| ![Advanced Output](docs/screenshots/advanced-output.png) | ![Fixture library](docs/screenshots/fixture-library.png) |
+| **Advanced Output** — lumiverses, fixtures placed on the composition, live pixel colours | **Fixture library** — 1,781 built-in fixtures (QLC+), shows what each channel does |
+| ![Audio](docs/screenshots/audio.png) | ![Diagnostics](docs/screenshots/diagnostics.png) |
+| **Audio** — bands, kick/snare/hat, Ableton Link, timing | **Diagnostics** — one-click probe and exportable report |
+| ![DMX Monitor](docs/screenshots/dmx-monitor.png) | |
+| **DMX Monitor** — live values of every channel | |
+
+## Status: v0.5
 
 | Area | Done |
 |---|---|
@@ -13,6 +27,7 @@ patched DMX fixtures, and the result goes out over Art-Net or sACN.
 | Effects | Brightness, Hue shift, Invert, Pulse, Audio brightness, Audio hue |
 | Advanced Output | Lumiverses (Art-Net / sACN, own universe and IP each), fixtures dragged, resized and rotated on the composition, snake / reverse wiring, auto universe spill, overlap warnings |
 | Fixture Editor | Pixel grids (columns × rows), colour order presets, per-pixel and header channels |
+| Fixture library | 1,781 fixtures built in (QLC+ library), search, pick a mode, add and place in one click; import any QLC+ `.qxf` (e.g. from the Open Fixture Library) by dragging it onto the window. RGB/W/A, CMY, UV, dimmers, 16-bit fine channels and multi-pixel heads are driven; shutters are held open, pan/tilt centred |
 | DMX Monitor | Live 512-channel view per universe with fixture boundaries |
 | Audio | Live input or loopback, 5 frequency bands + level, kick / snare / hi-hat detection (filter bank, no FFT), per-layer routing |
 | Timing | Engine on its own thread at a fixed DMX rate (default 44 Hz, keeps running when the window is hidden); hits sent instantly (~1 ms after detection); kick detection ~13 ms (Stable/Balanced/Fast) |
@@ -39,6 +54,16 @@ Lumen analyses the audio itself, so it needs to hear what rekordbox plays:
 - **Windows:** pick the device rekordbox outputs to; it's listed as "(loopback)".
 - **macOS:** set rekordbox's master output to [BlackHole](https://existential.audio/blackhole/) (free) or Loopback and select it as the input.
 - **Any OS:** cable the controller's booth or master out into an audio interface input.
+
+### Adding your fixtures
+
+Fixture Editor › **📚 Library**, search for the brand or model, pick the mode
+your fixture is set to, then **Add and place in Advanced Output**. The list
+shows what Lumen does with every channel.
+
+Not in the list? Download it from [open-fixture-library.org](https://open-fixture-library.org)
+as a **QLC+ fixture** (`.qxf`) and drag the file onto Lumen. It's copied to
+`~/Documents/Lumen/Fixtures`. Fixtures from an installed QLC+ are picked up too.
 
 ### Splitting the music across effects
 
@@ -93,3 +118,7 @@ Lumen's own code is MIT OR Apache-2.0. Builds with Ableton Link (the default
 `link` feature) include Ableton's GPL-2.0-or-later Link library, so those
 binaries are distributed under the GPL. Build with `--no-default-features`
 for a Link-free MIT/Apache build.
+
+The built-in fixture definitions come from the [QLC+](https://github.com/mcallegari/qlcplus)
+project (Apache-2.0); see `crates/lumen-fixtures/assets/QLCPLUS-LICENSE.txt`.
+Refresh them with `scripts/pack-fixtures.py`.
