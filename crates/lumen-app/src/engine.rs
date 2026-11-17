@@ -437,6 +437,45 @@ mod tests {
         eprintln!("hit -> DMX: instant {instant:.1} ms, waiting for frame {waiting:.1} ms");
     }
 
+    /// Prints how accurately this machine wakes a thread after 20 ms, with
+    /// and without the raised priority. Run with: cargo test timer_accuracy -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn timer_accuracy() {
+        fn measure(label: &str, raise: bool) {
+            std::thread::spawn(move || {
+                if raise {
+                    raise_thread_priority();
+                }
+                let w = Wake::default();
+                let mut v: Vec<f32> = (0..50)
+                    .map(|_| {
+                        let t = Instant::now();
+                        w.wait(Duration::from_millis(20));
+                        t.elapsed().as_secs_f32() * 1000.0
+                    })
+                    .collect();
+                v.sort_by(|a, b| a.total_cmp(b));
+                let s: Vec<f32> = (0..50)
+                    .map(|_| {
+                        let t = Instant::now();
+                        std::thread::sleep(Duration::from_millis(20));
+                        t.elapsed().as_secs_f32() * 1000.0
+                    })
+                    .collect();
+                let avg_s = s.iter().sum::<f32>() / s.len() as f32;
+                eprintln!(
+                    "TIMER {label}: condvar 20ms -> median {:.1} ms, p90 {:.1} ms, max {:.1} ms; sleep 20ms -> avg {avg_s:.1} ms",
+                    v[25], v[45], v[49]
+                );
+            })
+            .join()
+            .unwrap();
+        }
+        measure("normal", false);
+        measure("user-interactive", true);
+    }
+
     fn e_wake(eng: &Arc<Mutex<Engine>>) {
         eng.lock().unwrap().wake.notify();
     }
