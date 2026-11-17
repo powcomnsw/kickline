@@ -310,7 +310,7 @@ impl eframe::App for LumenApp {
         egui::Window::new("Fixture Editor")
             .open(&mut open)
             .default_pos([120.0, 110.0])
-            .default_size([720.0, 620.0])
+            .default_size([900.0, 640.0])
             .show(&ctx, |ui| fixture_editor::ui(&mut v, ui));
         v.windows.fixture_editor = open;
 
@@ -434,6 +434,13 @@ fn apply_args(app: &mut LumenApp, args: &[String]) {
         } else if let Some(ip) = arg.strip_prefix("--target=") {
             for l in &mut v.e.output.lumiverses {
                 l.target = ip.to_string();
+            }
+        } else if let Some(q) = arg.strip_prefix("--library=") {
+            v.s.windows.fixture_editor = true;
+            v.s.fe.browsing = true;
+            v.s.fe.query = q.to_string();
+            if let Some(&i) = v.s.fe.library().search(q, 1).first() {
+                v.s.fe.select_entry(i);
             }
         } else if arg == "--audio=demo" {
             v.start_demo_audio();

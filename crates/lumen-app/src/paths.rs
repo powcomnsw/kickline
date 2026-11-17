@@ -46,6 +46,27 @@ pub fn project_file() -> PathBuf {
     projects_dir().join("lumen_project.json")
 }
 
+/// Your own fixture files (.qxf), scanned by the fixture library.
+pub fn fixtures_dir() -> PathBuf {
+    let d = projects_dir().join("Fixtures");
+    let _ = std::fs::create_dir_all(&d);
+    d
+}
+
+/// Folders the fixture library scans: yours, plus an installed QLC+'s user fixtures.
+pub fn fixture_folders() -> Vec<PathBuf> {
+    let mut v = vec![fixtures_dir()];
+    let qlc = if cfg!(target_os = "macos") {
+        vec![home().join("Library/Application Support/QLC+/fixtures")]
+    } else if cfg!(target_os = "windows") {
+        vec![home().join("QLC+/Fixtures"), std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(home).join("qlcplus/fixtures")]
+    } else {
+        vec![home().join(".qlcplus/fixtures")]
+    };
+    v.extend(qlc.into_iter().filter(|p| p.is_dir()));
+    v
+}
+
 /// Reports go on the Desktop so they're easy to find and send.
 pub fn reports_dir() -> PathBuf {
     let desk = home().join("Desktop");

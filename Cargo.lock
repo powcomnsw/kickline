@@ -1928,7 +1928,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "lumen-app"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "eframe",
  "if-addrs",
@@ -1943,7 +1943,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-audio"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cpal",
  "libc",
@@ -1957,7 +1957,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1965,16 +1965,18 @@ dependencies = [
 
 [[package]]
 name = "lumen-fixtures"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
+ "flate2",
  "lumen-core",
+ "roxmltree",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "lumen-output"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "socket2",
 ]

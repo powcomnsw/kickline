@@ -41,8 +41,9 @@ Key decisions:
 - [ ] Clip and layer transition times (fade in/out)
 
 ### M3 — Real fixture support
-- [ ] Fixture library: import QLC+ `.qxf` and Open Fixture Library JSON
-- [ ] Multi-mode profiles, 16-bit channels, pan/tilt/colour wheel/gobo channels
+- [x] Fixture library: 1,781 built-in QLC+ fixtures, `.qxf` import (covers Open Fixture Library and GDTF via OFL)
+- [x] Multi-mode profiles, 16-bit fine channels, per-pixel heads, CMY/UV
+- [ ] Drive pan/tilt, colour wheels, gobos and strobe from Lumen (currently held at safe values)
 - [ ] Moving-head positioning from canvas (or XY pad layer)
 - [ ] Gamma / white-point / per-fixture colour calibration
 - [ ] Bilinear sampling and area-averaged sampling for fixtures that cover many pixels
@@ -70,8 +71,8 @@ Key decisions:
 - [ ] Developer ID signing + notarisation (needs an Apple Developer account)
 - [ ] Windows / Linux installers
 
-## Known limitations of v0.4
-- No fixture library import yet; types are made in the Fixture Editor.
+## Known limitations of v0.5
+- Imported moving heads light up but don't move yet: pan/tilt are held centred.
 - Drum detection is tuned for four-on-the-floor dance music; use the Tuning sliders for other styles.
 - Loopback capture is built in on Windows only; macOS needs BlackHole/Loopback.
 - Resolume's FFGL/ISF plugins, video codecs (DXV) and NDI are out of scope for v0.1.

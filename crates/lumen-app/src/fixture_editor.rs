@@ -1,12 +1,73 @@
-//! Fixture Editor: define pixel grids and their channel layout.
+//! Fixture Editor: define pixel grids and their channel layout, or import
+//! fixtures from the library (QLC+ `.qxf`, built-in or your own files).
 
-use crate::View;
-use eframe::egui::{self, Color32, Rect, Sense, Stroke, Vec2};
-use lumen_fixtures::{color_order, ChannelFn, FixtureType, COLOR_ORDERS};
+use crate::{log, paths, View};
+use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke, Vec2};
+use lumen_fixtures::library::Library;
+use lumen_fixtures::qxf::QxfFixture;
+use lumen_fixtures::{color_order, ChannelFn, Fixture, FixtureType, Slot, COLOR_ORDERS};
 
 #[derive(Default)]
 pub struct State {
     pub selected: usize,
+    /// Show the library browser instead of the type editor.
+    pub browsing: bool,
+    pub library: Option<Library>,
+    pub query: String,
+    pub entry: Option<usize>,
+    pub opened: Option<Result<QxfFixture, String>>,
+    pub mode: usize,
+    pub message: Option<String>,
+}
+
+impl State {
+    /// Load the library on first use (unpacks ~16 MB, takes a moment).
+    pub fn library(&mut self) -> &mut Library {
+        self.library.get_or_insert_with(|| {
+            let lib = Library::load(&paths::fixture_folders());
+            log::info("fixtures", format!("library loaded: {} fixtures", lib.entries.len()));
+            for e in &lib.errors {
+                log::warn("fixtures", e.clone());
+            }
+            lib
+        })
+    }
+
+    pub fn select_entry(&mut self, i: usize) {
+        self.entry = Some(i);
+        self.mode = 0;
+        self.opened = Some(self.library().open(i));
+    }
+
+    /// Import a file dropped on the window: copy it into ~/Documents/Lumen/Fixtures and show it.
+    pub fn import_dropped(&mut self, path: &std::path::Path) {
+        let dest = paths::fixtures_dir().join(path.file_name().unwrap_or_default());
+        let target = if path.starts_with(paths::fixtures_dir()) {
+            path.to_path_buf()
+        } else {
+            match std::fs::copy(path, &dest) {
+                Ok(_) => dest,
+                Err(e) => {
+                    log::warn("fixtures", format!("couldn't copy {} to your Fixtures folder: {e}", path.display()));
+                    path.to_path_buf()
+                }
+            }
+        };
+        let added = self.library().add_file(&target);
+        match added {
+            Some(i) => {
+                self.browsing = true;
+                self.query.clear();
+                self.select_entry(i);
+                log::info("fixtures", format!("imported {}", target.display()));
+            }
+            None => {
+                let why = self.library().errors.last().cloned().unwrap_or_default();
+                self.message = Some(format!("Couldn't import {}: {why}", path.display()));
+                log::error("fixtures", self.message.clone().unwrap());
+            }
+        }
+    }
 }
 
 fn channel_list(ui: &mut egui::Ui, id: &str, chans: &mut Vec<ChannelFn>) {
@@ -14,23 +75,7 @@ fn channel_list(ui: &mut egui::Ui, id: &str, chans: &mut Vec<ChannelFn>) {
     for (i, c) in chans.iter_mut().enumerate() {
         ui.horizontal(|ui| {
             ui.label(format!("{:>2}", i + 1));
-            egui::ComboBox::from_id_salt((id, i))
-                .width(90.0)
-                .selected_text(c.name())
-                .show_ui(ui, |ui| {
-                    for choice in ChannelFn::CHOICES {
-                        if ui
-                            .selectable_label(c.same_kind(choice), choice.name())
-                            .clicked()
-                            && !c.same_kind(choice)
-                        {
-                            *c = choice;
-                        }
-                    }
-                });
-            if let ChannelFn::Fixed(v) = c {
-                ui.add(egui::DragValue::new(v).range(0..=255));
-            }
+            func_combo(ui, (id, i), c);
             if ui.small_button("✕").clicked() {
                 remove = Some(i);
             }
@@ -46,180 +91,397 @@ fn channel_list(ui: &mut egui::Ui, id: &str, chans: &mut Vec<ChannelFn>) {
     });
 }
 
+fn func_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, c: &mut ChannelFn) {
+    egui::ComboBox::from_id_salt(id).width(90.0).selected_text(c.name()).show_ui(ui, |ui| {
+        for choice in ChannelFn::CHOICES {
+            if ui.selectable_label(c.same_kind(choice), choice.name()).clicked() && !c.same_kind(choice) {
+                *c = choice;
+            }
+        }
+    });
+    if let ChannelFn::Fixed(v) = c {
+        ui.add(egui::DragValue::new(v).range(0..=255));
+    }
+}
+
+/// What Lumen does with a channel, in words.
+fn describe(func: ChannelFn, fine: bool) -> (String, bool) {
+    match func {
+        ChannelFn::Fixed(v) => (format!("held at {v}"), false),
+        f if fine => (format!("{} (fine)", f.name()), true),
+        f => (f.name().to_string(), true),
+    }
+}
+
+/// Imported fixture: its exact channel list, editable per channel.
+fn slot_table(ui: &mut egui::Ui, slots: &mut [Slot]) {
+    egui::Grid::new("slots").num_columns(4).striped(true).spacing([10.0, 3.0]).show(ui, |ui| {
+        ui.weak("ch");
+        ui.weak("name");
+        ui.weak("pixel");
+        ui.weak("Lumen drives it as");
+        ui.end_row();
+        for (i, s) in slots.iter_mut().enumerate() {
+            ui.monospace(format!("{:>3}", i + 1));
+            ui.label(&s.name);
+            ui.label(s.pixel.map(|p| (p + 1).to_string()).unwrap_or_else(|| "all".into()));
+            ui.horizontal(|ui| {
+                func_combo(ui, ("slot", i), &mut s.func);
+                if !matches!(s.func, ChannelFn::Fixed(_)) {
+                    ui.checkbox(&mut s.fine, "fine");
+                }
+            });
+            ui.end_row();
+        }
+    });
+}
+
 /// Draw the pixel grid numbered in DMX order.
 fn preview(ui: &mut egui::Ui, t: &FixtureType) {
     let (cols, rows) = (t.columns.max(1), t.rows.max(1));
     let avail = ui.available_width().min(380.0);
-    let cell = (avail / cols as f32)
-        .min(200.0 / rows as f32)
-        .clamp(4.0, 40.0);
-    let (resp, painter) = ui.allocate_painter(
-        Vec2::new(cell * cols as f32, cell * rows as f32),
-        Sense::hover(),
-    );
-    let per = t.pixel.len().max(1);
+    let cell = (avail / cols as f32).min(200.0 / rows as f32).clamp(4.0, 40.0);
+    let (resp, painter) = ui.allocate_painter(Vec2::new(cell * cols as f32, cell * rows as f32), Sense::hover());
     for r in 0..rows {
         for c in 0..cols {
             let idx = r * cols + c;
-            let rr = Rect::from_min_size(
-                resp.rect.min + Vec2::new(c as f32 * cell, r as f32 * cell),
-                Vec2::splat(cell),
-            );
+            let rr = Rect::from_min_size(resp.rect.min + Vec2::new(c as f32 * cell, r as f32 * cell), Vec2::splat(cell));
             let hue = idx as f32 / (cols * rows) as f32;
             let [cr, cg, cb] = lumen_core::color::hsv_to_rgb(hue * 0.8, 0.5, 0.45);
-            painter.rect_filled(
-                rr.shrink(1.0),
-                2.0,
-                Color32::from_rgb((cr * 255.0) as u8, (cg * 255.0) as u8, (cb * 255.0) as u8),
-            );
-            painter.rect_stroke(
-                rr.shrink(1.0),
-                2.0,
-                Stroke::new(1.0, Color32::from_gray(90)),
-                egui::StrokeKind::Inside,
-            );
+            painter.rect_filled(rr.shrink(1.0), 2.0, Color32::from_rgb((cr * 255.0) as u8, (cg * 255.0) as u8, (cb * 255.0) as u8));
+            painter.rect_stroke(rr.shrink(1.0), 2.0, Stroke::new(1.0, Color32::from_gray(90)), egui::StrokeKind::Inside);
             if cell >= 22.0 {
-                painter.text(
-                    rr.center(),
-                    egui::Align2::CENTER_CENTER,
-                    format!("{}", idx + 1),
-                    egui::FontId::monospace(10.0),
-                    Color32::WHITE,
-                );
+                painter.text(rr.center(), egui::Align2::CENTER_CENTER, format!("{}", idx + 1), egui::FontId::monospace(10.0), Color32::WHITE);
             }
         }
     }
-    ui.weak(format!(
-        "Pixel 1 = ch {}-{}, last pixel ends at ch {}",
-        t.header.len() + 1,
-        t.header.len() + per,
-        t.footprint()
-    ));
+    if t.slots.is_none() {
+        let per = t.pixel.len().max(1);
+        ui.weak(format!("Pixel 1 = ch {}-{}, last pixel ends at ch {}", t.header.len() + 1, t.header.len() + per, t.footprint()));
+    }
+}
+
+fn type_editor(ui: &mut egui::Ui, t: &mut FixtureType) {
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::Grid::new("fe").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+            ui.label("Name");
+            ui.text_edit_singleline(&mut t.name);
+            ui.end_row();
+            if let Some(src) = &t.source {
+                ui.label("Imported from");
+                ui.weak(src);
+                ui.end_row();
+            }
+            ui.label("Pixels");
+            if t.slots.is_some() {
+                ui.label(format!("{} × {}", t.columns, t.rows));
+            } else {
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut t.columns).range(1..=1024).prefix("columns "));
+                    ui.label("×");
+                    ui.add(egui::DragValue::new(&mut t.rows).range(1..=256).prefix("rows "));
+                });
+            }
+            ui.end_row();
+            if t.slots.is_none() {
+                ui.label("Colour order");
+                let current = t.order_string();
+                egui::ComboBox::from_id_salt("order").selected_text(current.clone()).show_ui(ui, |ui| {
+                    for o in COLOR_ORDERS {
+                        if ui.selectable_label(current == o, o).clicked() {
+                            t.pixel = color_order(o);
+                        }
+                    }
+                });
+                ui.end_row();
+            }
+            ui.label("Footprint");
+            ui.label(match &t.slots {
+                Some(_) => format!("{} channels", t.footprint()),
+                None => format!(
+                    "{} channels ({} per pixel × {} pixels{})",
+                    t.footprint(),
+                    t.pixel.len(),
+                    t.pixel_count(),
+                    if t.header.is_empty() { String::new() } else { format!(" + {} header", t.header.len()) }
+                ),
+            });
+            ui.end_row();
+        });
+        if t.footprint() > 512 {
+            ui.weak("Larger than one universe: pixels continue on the next universe automatically.");
+        }
+        ui.separator();
+        match &mut t.slots {
+            Some(slots) => {
+                ui.strong("Channels");
+                ui.weak("Colour and dimmer channels follow the image. Others are held at a fixed value you can change.");
+                slot_table(ui, slots);
+            }
+            None => {
+                ui.columns(2, |cols| {
+                    cols[0].strong("Channels per pixel");
+                    channel_list(&mut cols[0], "pix", &mut t.pixel);
+                    cols[1].strong("Header channels (sent once)");
+                    channel_list(&mut cols[1], "hdr", &mut t.header);
+                });
+            }
+        }
+        ui.separator();
+        ui.strong("Pixel order");
+        preview(ui, t);
+    });
+}
+
+/// The library browser. Returns a type to add, and whether to also place it.
+fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
+    let mut result = None;
+    let total = st.library().entries.len();
+    ui.horizontal(|ui| {
+        ui.label("🔍");
+        ui.add(
+            egui::TextEdit::singleline(&mut st.query)
+                .hint_text(format!("Search {total} fixtures: brand or model"))
+                .desired_width(300.0),
+        );
+        if ui.button("⟳ Rescan your folders").clicked() {
+            st.library = None;
+            st.entry = None;
+            st.opened = None;
+        }
+    });
+    let q = st.query.clone();
+    let hits = st.library().search(&q, 300);
+    ui.columns(2, |cols| {
+        let ui = &mut cols[0];
+        egui::ScrollArea::vertical().id_salt("libhits").max_height(420.0).show(ui, |ui| {
+            let mut pick = None;
+            {
+                let lib = st.library.as_ref().unwrap();
+                for &i in &hits {
+                    let e = &lib.entries[i];
+                    let mut text = RichText::new(format!("{} — {}", e.manufacturer, e.model));
+                    if e.origin() == "your files" {
+                        text = text.color(Color32::from_rgb(120, 200, 255));
+                    }
+                    if ui.selectable_label(st.entry == Some(i), text).clicked() {
+                        pick = Some(i);
+                    }
+                }
+            }
+            if let Some(i) = pick {
+                st.select_entry(i);
+            }
+            if hits.is_empty() {
+                ui.weak("Nothing found.");
+            } else if hits.len() == 300 {
+                ui.weak("Showing the first 300; type more to narrow it down.");
+            }
+        });
+
+        let ui = &mut cols[1];
+        match &st.opened {
+            None => {
+                ui.weak("Pick a fixture on the left.");
+            }
+            Some(Err(e)) => {
+                ui.colored_label(Color32::from_rgb(240, 90, 80), format!("Can't read this fixture: {e}"));
+            }
+            Some(Ok(f)) => {
+                ui.heading(f.title());
+                ui.weak(&f.kind);
+                st.mode = st.mode.min(f.modes.len() - 1);
+                let label = |m: usize| format!("{} ({} ch)", f.modes[m].name, f.modes[m].channels.len());
+                egui::ComboBox::from_id_salt("qxfmode").width(260.0).selected_text(label(st.mode)).show_ui(ui, |ui| {
+                    for m in 0..f.modes.len() {
+                        ui.selectable_value(&mut st.mode, m, label(m));
+                    }
+                });
+                let src = st.library.as_ref().map(|l| l.source_label(st.entry.unwrap_or(0))).unwrap_or_default();
+                match f.to_type(st.mode, &src) {
+                    Ok(t) => {
+                        let driven = f.driven_channels(st.mode);
+                        ui.label(format!("{} pixel(s), {} of {} channels follow the image", t.pixel_count(), driven, t.footprint()));
+                        if driven == 0 {
+                            ui.colored_label(
+                                Color32::from_rgb(240, 190, 60),
+                                "No colour or dimmer channels in this mode: Lumen can't light it yet (moving-head control is planned).",
+                            );
+                        }
+                        egui::ScrollArea::vertical().id_salt("modech").max_height(330.0).show(ui, |ui| {
+                            egui::Grid::new("modech_g").num_columns(3).striped(true).spacing([10.0, 2.0]).show(ui, |ui| {
+                                for (i, s) in t.slots.as_ref().unwrap().iter().enumerate() {
+                                    ui.monospace(format!("{:>3}", i + 1));
+                                    ui.label(&s.name);
+                                    let (what, lit) = describe(s.func, s.fine);
+                                    let what = match s.pixel {
+                                        Some(p) if t.pixel_count() > 1 => format!("{what} · pixel {}", p + 1),
+                                        _ => what,
+                                    };
+                                    if lit {
+                                        ui.colored_label(Color32::from_rgb(90, 210, 120), what);
+                                    } else {
+                                        ui.weak(what);
+                                    }
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("+ Add to fixture types").clicked() {
+                                result = Some((t.clone(), false));
+                            }
+                            if ui.button("+ Add and place in Advanced Output").clicked() {
+                                result = Some((t, true));
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        ui.colored_label(Color32::from_rgb(240, 90, 80), e);
+                    }
+                }
+            }
+        }
+    });
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.weak(format!("Your fixtures: {}", paths::fixtures_dir().display()));
+        if ui.small_button("Show folder").clicked() {
+            paths::reveal(&paths::fixtures_dir());
+        }
+    });
+    ui.weak(
+        "Missing one? Download it from open-fixture-library.org as a \"QLC+ fixture\" and drag the file onto Lumen. \
+         Built-in fixtures come from the QLC+ project (Apache-2.0).",
+    );
+    result
 }
 
 pub fn ui(app: &mut View, ui: &mut egui::Ui) {
     let View { e, s } = app;
     let o = &mut e.output;
+    let lumiverse = s.ao.lumiverse;
     let st = &mut s.fe;
-    egui::Panel::left("fe_left")
-        .default_size(220.0)
-        .resizable(true)
-        .show(ui, |ui| {
-            ui.heading("Fixture types");
+    let mut open_output = false;
+    egui::Panel::left("fe_left").default_size(240.0).resizable(true).show(ui, |ui| {
+        ui.heading("Fixture types");
+        egui::ScrollArea::vertical().id_salt("types").max_height(400.0).show(ui, |ui| {
             for (i, t) in o.types.iter().enumerate() {
                 let used = o.fixtures.iter().filter(|f| f.type_id == i).count();
-                let text = format!(
-                    "{}  ({}×{}, {} ch)",
-                    t.name,
-                    t.columns,
-                    t.rows,
-                    t.footprint()
-                );
-                if ui
-                    .selectable_label(st.selected == i, text)
-                    .on_hover_text(format!("Used by {used} fixture(s)"))
-                    .clicked()
-                {
+                let text = format!("{}  ({}×{}, {} ch)", t.name, t.columns, t.rows, t.footprint());
+                if ui.selectable_label(!st.browsing && st.selected == i, text).on_hover_text(format!("Used by {used} fixture(s)")).clicked() {
                     st.selected = i;
+                    st.browsing = false;
                 }
             }
-            ui.horizontal(|ui| {
-                if ui.button("+ New").clicked() {
-                    o.types.push(FixtureType::new("New fixture", 10, 1, "RGB"));
-                    st.selected = o.types.len() - 1;
-                }
-                if ui
-                    .add_enabled(st.selected < o.types.len(), egui::Button::new("Duplicate"))
-                    .clicked()
-                {
-                    let mut t = o.types[st.selected].clone();
-                    t.name.push_str(" copy");
-                    o.types.push(t);
-                    st.selected = o.types.len() - 1;
-                }
-                let in_use = o.type_in_use(st.selected);
-                if ui
-                    .add_enabled(
-                        st.selected < o.types.len() && !in_use,
-                        egui::Button::new("Delete"),
-                    )
-                    .on_disabled_hover_text("Still used by fixtures in Advanced Output")
-                    .clicked()
-                {
-                    o.remove_type(st.selected);
-                    st.selected = st.selected.saturating_sub(1);
-                }
-            });
         });
-    egui::CentralPanel::default().show(ui, |ui| {
-        let Some(t) = o.types.get_mut(st.selected) else {
-            ui.label("No fixture types yet.");
-            return;
-        };
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("fe")
-                .num_columns(2)
-                .spacing([10.0, 6.0])
-                .show(ui, |ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut t.name);
-                    ui.end_row();
-                    ui.label("Pixels");
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut t.columns)
-                                .range(1..=1024)
-                                .prefix("columns "),
-                        );
-                        ui.label("×");
-                        ui.add(
-                            egui::DragValue::new(&mut t.rows)
-                                .range(1..=256)
-                                .prefix("rows "),
-                        );
-                    });
-                    ui.end_row();
-                    ui.label("Colour order");
-                    let current = t.order_string();
-                    egui::ComboBox::from_id_salt("order")
-                        .selected_text(current.clone())
-                        .show_ui(ui, |ui| {
-                            for o in COLOR_ORDERS {
-                                if ui.selectable_label(current == o, o).clicked() {
-                                    t.pixel = color_order(o);
-                                }
-                            }
-                        });
-                    ui.end_row();
-                    ui.label("Footprint");
-                    ui.label(format!(
-                        "{} channels ({} per pixel × {} pixels{})",
-                        t.footprint(),
-                        t.pixel.len(),
-                        t.pixel_count(),
-                        if t.header.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" + {} header", t.header.len())
-                        }
-                    ));
-                    ui.end_row();
-                });
-            if t.footprint() > 512 {
-                ui.weak(
-                    "Larger than one universe: pixels continue on the next universe automatically.",
-                );
+        ui.horizontal_wrapped(|ui| {
+            ui.toggle_value(&mut st.browsing, "📚 Library");
+            if ui.button("+ New").clicked() {
+                o.types.push(FixtureType::new("New fixture", 10, 1, "RGB"));
+                st.selected = o.types.len() - 1;
+                st.browsing = false;
             }
-            ui.separator();
-            ui.columns(2, |cols| {
-                cols[0].strong("Channels per pixel");
-                channel_list(&mut cols[0], "pix", &mut t.pixel);
-                cols[1].strong("Header channels (sent once)");
-                channel_list(&mut cols[1], "hdr", &mut t.header);
-            });
-            ui.separator();
-            ui.strong("Pixel order");
-            preview(ui, t);
+            if ui.add_enabled(st.selected < o.types.len(), egui::Button::new("Duplicate")).clicked() {
+                let mut t = o.types[st.selected].clone();
+                t.name.push_str(" copy");
+                o.types.push(t);
+                st.selected = o.types.len() - 1;
+                st.browsing = false;
+            }
+            let in_use = o.type_in_use(st.selected);
+            if ui
+                .add_enabled(st.selected < o.types.len() && !in_use, egui::Button::new("Delete"))
+                .on_disabled_hover_text("Still used by fixtures in Advanced Output")
+                .clicked()
+            {
+                o.remove_type(st.selected);
+                st.selected = st.selected.saturating_sub(1);
+            }
         });
     });
+    egui::CentralPanel::default().show(ui, |ui| {
+        if let Some(m) = st.message.clone() {
+            ui.horizontal(|ui| {
+                ui.colored_label(Color32::from_rgb(90, 210, 120), &m);
+                if ui.small_button("✕").clicked() {
+                    st.message = None;
+                }
+            });
+        }
+        if st.browsing {
+            if let Some((t, place)) = browser(st, ui) {
+                let name = t.name.clone();
+                let strip = t.rows <= 1 && t.columns > 1;
+                o.types.push(t);
+                st.selected = o.types.len() - 1;
+                st.browsing = false;
+                if place && !o.lumiverses.is_empty() {
+                    let lv = lumiverse.min(o.lumiverses.len() - 1);
+                    let address = o.next_free_address(lv);
+                    o.fixtures.push(Fixture {
+                        name: name.clone(),
+                        type_id: st.selected,
+                        lumiverse: lv,
+                        address,
+                        x: 0.5,
+                        y: 0.5,
+                        w: if strip { 0.5 } else { 0.12 },
+                        h: if strip { 0.05 } else { 0.16 },
+                        rotation: 0.0,
+                        snake: false,
+                        reverse: false,
+                    });
+                    open_output = true;
+                    st.message = Some(format!("Added \"{name}\" and placed it at address {address} on {}.", o.lumiverses[lv].name));
+                } else {
+                    st.message = Some(format!("Added \"{name}\". Place it from Advanced Output."));
+                }
+                log::info("fixtures", st.message.clone().unwrap());
+            }
+            return;
+        }
+        match o.types.get_mut(st.selected) {
+            Some(t) => type_editor(ui, t),
+            None => {
+                ui.label("No fixture types yet. Open 📚 Library or click + New.");
+            }
+        }
+    });
+    if open_output {
+        s.windows.advanced_output = true;
+        s.ao.selected = Some(e.output.fixtures.len() - 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Dropping a .qxf copies it into the Fixtures folder and opens it in the library.
+    #[test]
+    fn import_dropped_file() {
+        let mut st = State::default();
+        let i = st.library().search("chauvet slimpar 56", 1)[0];
+        let xml = st.library().read(i).unwrap();
+        let tmp = std::env::temp_dir().join(format!("lumen-drop-{}.qxf", std::process::id()));
+        std::fs::write(&tmp, xml).unwrap();
+        st.import_dropped(&tmp);
+        assert!(st.browsing);
+        let f = st.opened.as_ref().unwrap().as_ref().unwrap();
+        assert_eq!(f.model, "SlimPAR 56");
+        let copied = paths::fixtures_dir().join(tmp.file_name().unwrap());
+        assert!(copied.exists());
+        std::fs::remove_file(copied).ok();
+        std::fs::remove_file(tmp).ok();
+
+        // A broken file is reported, not imported.
+        let bad = std::env::temp_dir().join(format!("lumen-bad-{}.qxf", std::process::id()));
+        std::fs::write(&bad, "not xml").unwrap();
+        st.message = None;
+        st.import_dropped(&bad);
+        assert!(st.message.as_ref().unwrap().contains("Couldn't import"));
+        std::fs::remove_file(paths::fixtures_dir().join(bad.file_name().unwrap())).ok();
+        std::fs::remove_file(bad).ok();
+    }
 }

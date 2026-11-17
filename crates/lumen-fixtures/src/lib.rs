@@ -6,6 +6,11 @@
 //! - a **Fixture type** defines a grid of pixels and the channels per pixel;
 //! - a **Fixture** is a type placed on the canvas (position, size, rotation)
 //!   and patched to a lumiverse at a start address.
+//!
+//! Fixture types can be imported from QLC+ `.qxf` files; see [`qxf`] and [`library`].
+
+pub mod library;
+pub mod qxf;
 
 use lumen_core::{Frame, Rgba};
 use serde::{Deserialize, Serialize};
@@ -21,6 +26,12 @@ pub enum ChannelFn {
     Blue,
     White,
     Amber,
+    /// Subtractive colour (CMY fixtures): 255 = full filter.
+    Cyan,
+    Magenta,
+    Yellow,
+    /// UV emitter. Lumen has no UV in its image, so this stays off.
+    Uv,
     /// Intensity. When a pixel has a dimmer, the colour channels are
     /// normalised so the dimmer carries the brightness.
     Dimmer,
@@ -29,12 +40,16 @@ pub enum ChannelFn {
 }
 
 impl ChannelFn {
-    pub const CHOICES: [ChannelFn; 7] = [
+    pub const CHOICES: [ChannelFn; 11] = [
         ChannelFn::Red,
         ChannelFn::Green,
         ChannelFn::Blue,
         ChannelFn::White,
         ChannelFn::Amber,
+        ChannelFn::Cyan,
+        ChannelFn::Magenta,
+        ChannelFn::Yellow,
+        ChannelFn::Uv,
         ChannelFn::Dimmer,
         ChannelFn::Fixed(0),
     ];
@@ -46,6 +61,10 @@ impl ChannelFn {
             ChannelFn::Blue => "Blue",
             ChannelFn::White => "White",
             ChannelFn::Amber => "Amber",
+            ChannelFn::Cyan => "Cyan",
+            ChannelFn::Magenta => "Magenta",
+            ChannelFn::Yellow => "Yellow",
+            ChannelFn::Uv => "UV",
             ChannelFn::Dimmer => "Dimmer",
             ChannelFn::Fixed(_) => "Fixed",
         }
@@ -65,6 +84,10 @@ pub fn color_order(s: &str) -> Vec<ChannelFn> {
             'B' => Some(ChannelFn::Blue),
             'W' => Some(ChannelFn::White),
             'A' => Some(ChannelFn::Amber),
+            'C' => Some(ChannelFn::Cyan),
+            'M' => Some(ChannelFn::Magenta),
+            'Y' => Some(ChannelFn::Yellow),
+            'U' => Some(ChannelFn::Uv),
             'D' => Some(ChannelFn::Dimmer),
             _ => None,
         })
@@ -73,7 +96,21 @@ pub fn color_order(s: &str) -> Vec<ChannelFn> {
 
 pub const COLOR_ORDERS: [&str; 10] = ["RGB", "RBG", "GRB", "GBR", "BRG", "BGR", "RGBW", "GRBW", "DRGB", "RGBWA"];
 
-/// A fixture definition, as made in the Fixture Editor.
+/// One DMX channel of an imported fixture, in DMX order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Slot {
+    /// The manufacturer's channel name ("Red", "Shutter", "Pan coarse"...).
+    pub name: String,
+    pub func: ChannelFn,
+    /// Which pixel (head) this channel belongs to; None = whole fixture.
+    #[serde(default)]
+    pub pixel: Option<usize>,
+    /// Low byte of a 16-bit pair.
+    #[serde(default)]
+    pub fine: bool,
+}
+
+/// A fixture definition, as made in the Fixture Editor or imported.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FixtureType {
     pub name: String,
@@ -84,11 +121,78 @@ pub struct FixtureType {
     /// Channels sent once before the pixels (e.g. strobe, mode).
     #[serde(default)]
     pub header: Vec<ChannelFn>,
+    /// Imported fixtures: the exact channel list in DMX order. When set, it
+    /// replaces `pixel` / `header`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slots: Option<Vec<Slot>>,
+    /// Where it came from, e.g. "QLC+ library: Chauvet/Chauvet-SlimPAR-56.qxf".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// A pixel's colour broken down for every kind of emitter.
+struct PixelColor {
+    r: f32,
+    g: f32,
+    b: f32,
+    white: f32,
+    amber: f32,
+    /// Brightness, for dimmer channels.
+    max: f32,
+}
+
+impl PixelColor {
+    /// `funcs` = the channels this pixel has; decides white/amber extraction
+    /// and whether a dimmer carries the brightness.
+    fn new(c: Rgba, funcs: &[ChannelFn]) -> Self {
+        let (mut r, mut g, mut b) = (c.r.clamp(0.0, 1.0), c.g.clamp(0.0, 1.0), c.b.clamp(0.0, 1.0));
+        let max = r.max(g).max(b);
+        if funcs.contains(&ChannelFn::Dimmer) && max > 0.0 {
+            r /= max;
+            g /= max;
+            b /= max;
+        }
+        let white = if funcs.contains(&ChannelFn::White) { r.min(g).min(b) } else { 0.0 };
+        r -= white;
+        g -= white;
+        b -= white;
+        // Amber takes what red and green share after white is removed.
+        let amber = if funcs.contains(&ChannelFn::Amber) { r.min(g * 2.0) * 0.5 } else { 0.0 };
+        PixelColor { r, g, b, white, amber, max }
+    }
+
+    /// 0..1 value for one channel function.
+    fn value(&self, f: ChannelFn) -> f32 {
+        match f {
+            // With a white emitter, RGB carry only the colour left after white is taken out.
+            ChannelFn::Red => self.r,
+            ChannelFn::Green => self.g,
+            ChannelFn::Blue => self.b,
+            ChannelFn::White => self.white,
+            ChannelFn::Amber => self.amber,
+            // CMY filters subtract from white light.
+            ChannelFn::Cyan => 1.0 - (self.r + self.white),
+            ChannelFn::Magenta => 1.0 - (self.g + self.white),
+            ChannelFn::Yellow => 1.0 - (self.b + self.white),
+            ChannelFn::Uv => 0.0,
+            ChannelFn::Dimmer => self.max,
+            ChannelFn::Fixed(v) => v as f32 / 255.0,
+        }
+    }
+}
+
+fn to_byte(v: f32, fine: bool) -> u8 {
+    let v16 = (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u32;
+    if fine {
+        (v16 & 0xff) as u8
+    } else {
+        (v16 >> 8) as u8
+    }
 }
 
 impl FixtureType {
     pub fn new(name: &str, columns: usize, rows: usize, order: &str) -> Self {
-        FixtureType { name: name.into(), columns, rows, pixel: color_order(order), header: Vec::new() }
+        FixtureType { name: name.into(), columns, rows, pixel: color_order(order), header: Vec::new(), slots: None, source: None }
     }
 
     pub fn pixel_count(&self) -> usize {
@@ -96,7 +200,10 @@ impl FixtureType {
     }
 
     pub fn footprint(&self) -> usize {
-        self.header.len() + self.pixel_count() * self.pixel.len()
+        match &self.slots {
+            Some(s) => s.len(),
+            None => self.header.len() + self.pixel_count() * self.pixel.len(),
+        }
     }
 
     /// The colour order string if the pixel is pure colour/dimmer channels.
@@ -109,6 +216,10 @@ impl FixtureType {
                 ChannelFn::Blue => 'B',
                 ChannelFn::White => 'W',
                 ChannelFn::Amber => 'A',
+                ChannelFn::Cyan => 'C',
+                ChannelFn::Magenta => 'M',
+                ChannelFn::Yellow => 'Y',
+                ChannelFn::Uv => 'U',
                 ChannelFn::Dimmer => 'D',
                 ChannelFn::Fixed(_) => 'F',
             })
@@ -116,35 +227,47 @@ impl FixtureType {
     }
 
     fn encode_pixel(&self, c: Rgba, out: &mut Vec<u8>) {
-        let (mut r, mut g, mut b) = (c.r.clamp(0.0, 1.0), c.g.clamp(0.0, 1.0), c.b.clamp(0.0, 1.0));
-        let has_dimmer = self.pixel.contains(&ChannelFn::Dimmer);
-        let max = r.max(g).max(b);
-        if has_dimmer && max > 0.0 {
-            r /= max;
-            g /= max;
-            b /= max;
-        }
-        let has_white = self.pixel.contains(&ChannelFn::White);
-        let white = if has_white { r.min(g).min(b) } else { 0.0 };
-        if has_white {
-            r -= white;
-            g -= white;
-            b -= white;
-        }
-        let has_amber = self.pixel.contains(&ChannelFn::Amber);
-        // Amber takes what red and green share after white is removed.
-        let amber = if has_amber { r.min(g * 2.0) * 0.5 } else { 0.0 };
-        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let pc = PixelColor::new(c, &self.pixel);
         for ch in &self.pixel {
             out.push(match *ch {
-                ChannelFn::Red => q(r),
-                ChannelFn::Green => q(g),
-                ChannelFn::Blue => q(b),
-                ChannelFn::White => q(white),
-                ChannelFn::Amber => q(amber),
-                ChannelFn::Dimmer => q(max),
                 ChannelFn::Fixed(v) => v,
+                f => to_byte(pc.value(f), false),
             });
+        }
+    }
+
+    /// Encode an imported fixture: `colors[i]` is pixel i's sampled colour.
+    fn encode_slots(&self, slots: &[Slot], colors: &[Rgba], out: &mut Vec<u8>) {
+        let n = colors.len().max(1);
+        let funcs: Vec<Vec<ChannelFn>> = (0..n)
+            .map(|p| slots.iter().filter(|s| s.pixel == Some(p)).map(|s| s.func).collect())
+            .collect();
+        let pcs: Vec<PixelColor> =
+            (0..n).map(|p| PixelColor::new(colors.get(p).copied().unwrap_or(Rgba::BLACK), &funcs[p])).collect();
+        // Whole-fixture colour channels get the average of all pixels.
+        let avg = {
+            let mut a = Rgba::TRANSPARENT;
+            for c in colors {
+                a.r += c.r / n as f32;
+                a.g += c.g / n as f32;
+                a.b += c.b / n as f32;
+            }
+            let global: Vec<ChannelFn> = slots.iter().filter(|s| s.pixel.is_none()).map(|s| s.func).collect();
+            PixelColor::new(Rgba::rgb(a.r, a.g, a.b), &global)
+        };
+        let pixels_have_colour = funcs.iter().any(|f| f.iter().any(|x| !matches!(x, ChannelFn::Fixed(_) | ChannelFn::Dimmer)));
+        for s in slots {
+            let v = match (s.func, s.pixel) {
+                (ChannelFn::Fixed(v), _) => {
+                    out.push(v);
+                    continue;
+                }
+                (f, Some(p)) => pcs.get(p).map(|pc| pc.value(f)).unwrap_or(0.0),
+                // A master dimmer over pixels that carry their own colour: leave it open.
+                (ChannelFn::Dimmer, None) if pixels_have_colour => 1.0,
+                (f, None) => avg.value(f),
+            };
+            out.push(to_byte(v, s.fine));
         }
     }
 }
@@ -382,6 +505,10 @@ impl AdvancedOutput {
             segs.push(Segment { universe_offset: uni, start: addr, len });
             addr += len;
         };
+        if let Some(slots) = &t.slots {
+            place(slots.len(), &mut segs);
+            return segs;
+        }
         place(t.header.len(), &mut segs);
         for _ in 0..t.pixel_count() {
             place(t.pixel.len(), &mut segs);
@@ -396,6 +523,15 @@ impl AdvancedOutput {
         for fx in &self.fixtures {
             let (Some(t), Some(lv)) = (self.types.get(fx.type_id), self.lumiverses.get(fx.lumiverse)) else { continue };
             let segs = self.layout(fx);
+            if let Some(slots) = &t.slots {
+                let Some(seg) = segs.first() else { continue };
+                let colors: Vec<Rgba> =
+                    fx.pixel_local(t).into_iter().map(|(lx, ly)| fx.sample_cell(self.aspect, t, frame, lx, ly)).collect();
+                bytes.clear();
+                t.encode_slots(slots, &colors, &mut bytes);
+                write(&mut out, fx.lumiverse, lv.universe + seg.universe_offset, seg.start, &bytes);
+                continue;
+            }
             let mut seg_iter = segs.iter();
             bytes.clear();
             if !t.header.is_empty() {
