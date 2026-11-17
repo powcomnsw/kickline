@@ -1,8 +1,8 @@
 //! Audio window: pick the input, watch each band, tune the detectors and
 //! see which layers react to what.
 
-use crate::util::band_color;
 use crate::engine::AudioSource;
+use crate::util::band_color;
 use crate::View;
 use eframe::egui::{self, Color32, Rect, Sense, Vec2};
 use lumen_audio::{list_devices, AudioInput, KickResponse};
@@ -91,52 +91,93 @@ fn start(app: &mut View, pick: Pick) {
 fn timing(app: &mut View, ui: &mut egui::Ui) {
     let link_ok = crate::link::LinkSync::AVAILABLE;
     ui.add_enabled_ui(link_ok, |ui| {
-        ui.checkbox(&mut app.e.sync.link_enabled, "Follow rekordbox via Ableton Link")
-            .on_hover_text("rekordbox Performance mode: press LINK in the global section and on the decks.");
+        ui.checkbox(
+            &mut app.e.sync.link_enabled,
+            "Follow rekordbox via Ableton Link",
+        )
+        .on_hover_text(
+            "rekordbox Performance mode: press LINK in the global section and on the decks.",
+        );
     });
     if !link_ok {
         ui.weak("This build was made without Ableton Link.");
     }
     if let Some(st) = &app.e.link_status {
         if st.peers > 0 {
-            ui.colored_label(Color32::from_rgb(90, 210, 120), format!("Synced: {} peer(s), {:.2} BPM, beat {:.2}", st.peers, st.tempo, st.beat));
+            ui.colored_label(
+                Color32::from_rgb(90, 210, 120),
+                format!(
+                    "Synced: {} peer(s), {:.2} BPM, beat {:.2}",
+                    st.peers, st.tempo, st.beat
+                ),
+            );
         } else {
-            ui.colored_label(Color32::from_rgb(240, 190, 60), "Waiting for rekordbox. Turn on LINK in rekordbox, same Wi-Fi/LAN.");
+            ui.colored_label(
+                Color32::from_rgb(240, 190, 60),
+                "Waiting for rekordbox. Turn on LINK in rekordbox, same Wi-Fi/LAN.",
+            );
         }
     }
     ui.add_enabled(
         app.e.sync.link_enabled,
-        egui::Slider::new(&mut app.e.sync.lookahead_ms, 0.0..=100.0).suffix(" ms").text("fire early (Link)"),
+        egui::Slider::new(&mut app.e.sync.lookahead_ms, 0.0..=100.0)
+            .suffix(" ms")
+            .text("fire early (Link)"),
     )
-    .on_hover_text("Beat and Bar triggers fire this much before the beat, to cancel node and fixture delay.");
-    ui.add(egui::Slider::new(&mut app.e.sync.send_rate_hz, 20.0..=120.0).suffix(" Hz").text("DMX refresh"))
-        .on_hover_text("44 Hz matches a full DMX universe. Higher helps pixel controllers.");
-    ui.checkbox(&mut app.e.sync.send_on_hit, "Send immediately on kick / snare / hat");
+    .on_hover_text(
+        "Beat and Bar triggers fire this much before the beat, to cancel node and fixture delay.",
+    );
+    ui.add(
+        egui::Slider::new(&mut app.e.sync.send_rate_hz, 20.0..=120.0)
+            .suffix(" Hz")
+            .text("DMX refresh"),
+    )
+    .on_hover_text("44 Hz matches a full DMX universe. Higher helps pixel controllers.");
+    ui.checkbox(
+        &mut app.e.sync.send_on_hit,
+        "Send immediately on kick / snare / hat",
+    );
     ui.horizontal(|ui| {
         ui.label("Kick response");
-        egui::ComboBox::from_id_salt("kickresp").selected_text(app.e.audio_settings.kick_response.name()).show_ui(ui, |ui| {
-            for k in KickResponse::ALL {
-                ui.selectable_value(&mut app.e.audio_settings.kick_response, k, k.name());
-            }
-        });
+        egui::ComboBox::from_id_salt("kickresp")
+            .selected_text(app.e.audio_settings.kick_response.name())
+            .show_ui(ui, |ui| {
+                for k in KickResponse::ALL {
+                    ui.selectable_value(&mut app.e.audio_settings.kick_response, k, k.name());
+                }
+            });
     });
     let m = &app.e.metrics;
     let (hit, n) = m.hit_latency();
-    egui::Grid::new("lat").num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
-        ui.weak("Audio input");
-        ui.label(if m.input_latency_ms > 0.0 { format!("{:.1} ms", m.input_latency_ms) } else { "—".into() });
-        ui.end_row();
-        ui.weak("Hit → DMX sent");
-        ui.label(if n > 0 { format!("{hit:.1} ms") } else { "—".into() });
-        ui.end_row();
-        ui.weak("DMX rate");
-        ui.label(format!("{:.0} Hz", m.output_hz()));
-        ui.end_row();
-    });
+    egui::Grid::new("lat")
+        .num_columns(2)
+        .spacing([12.0, 2.0])
+        .show(ui, |ui| {
+            ui.weak("Audio input");
+            ui.label(if m.input_latency_ms > 0.0 {
+                format!("{:.1} ms", m.input_latency_ms)
+            } else {
+                "—".into()
+            });
+            ui.end_row();
+            ui.weak("Hit → DMX sent");
+            ui.label(if n > 0 {
+                format!("{hit:.1} ms")
+            } else {
+                "—".into()
+            });
+            ui.end_row();
+            ui.weak("DMX rate");
+            ui.label(format!("{:.0} Hz", m.output_hz()));
+            ui.end_row();
+        });
 }
 
 pub fn ui(app: &mut View, ui: &mut egui::Ui) {
-    if app.audio_devices.is_empty() && app.audio_apps.is_empty() && ui.ctx().cumulative_frame_nr() % 300 == 0 {
+    if app.audio_devices.is_empty()
+        && app.audio_apps.is_empty()
+        && ui.ctx().cumulative_frame_nr() % 300 == 0
+    {
         refresh_sources(app);
     }
     egui::ScrollArea::vertical().show(ui, |ui| {

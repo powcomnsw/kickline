@@ -24,7 +24,10 @@ use std::time::{Duration, Instant};
 pub enum AudioSource {
     Off,
     /// Built-in drum machine, for trying things out without music.
-    Demo { beat: DemoBeat, analyzer: Analyzer },
+    Demo {
+        beat: DemoBeat,
+        analyzer: Analyzer,
+    },
     /// A device or an app (the stream itself is kept alive by the UI).
     Live(AudioFeed),
 }
@@ -53,7 +56,12 @@ pub struct SyncSettings {
 
 impl Default for SyncSettings {
     fn default() -> Self {
-        SyncSettings { link_enabled: false, lookahead_ms: 20.0, send_rate_hz: 44.0, send_on_hit: true }
+        SyncSettings {
+            link_enabled: false,
+            lookahead_ms: 20.0,
+            send_rate_hz: 44.0,
+            send_on_hit: true,
+        }
     }
 }
 
@@ -119,7 +127,10 @@ impl Engine {
         let fs = 48000.0;
         let mut analyzer = Analyzer::new(fs);
         analyzer.wake = Some(self.wake.clone());
-        self.set_audio(AudioSource::Demo { beat: DemoBeat::new(fs, self.comp.bpm as f32), analyzer });
+        self.set_audio(AudioSource::Demo {
+            beat: DemoBeat::new(fs, self.comp.bpm as f32),
+            analyzer,
+        });
     }
 
     fn period(&self) -> Duration {
@@ -129,7 +140,10 @@ impl Engine {
     /// Advance the clock, read audio, render, map and send.
     pub fn tick(&mut self, woke_by_hit: bool) {
         let now = Instant::now();
-        let dt = now.duration_since(self.last_tick).as_secs_f64().clamp(0.0, 0.2);
+        let dt = now
+            .duration_since(self.last_tick)
+            .as_secs_f64()
+            .clamp(0.0, 0.2);
         self.last_tick = now;
 
         // Clock: Ableton Link if on and someone else is in the session, else our BPM.
@@ -155,7 +169,10 @@ impl Engine {
         self.update_audio(dt);
         let t = Instant::now();
         self.frame = self.comp.render();
-        Metrics::smooth(&mut self.metrics.render_ms, t.elapsed().as_secs_f32() * 1000.0);
+        Metrics::smooth(
+            &mut self.metrics.render_ms,
+            t.elapsed().as_secs_f32() * 1000.0,
+        );
         self.send_dmx();
         let sent_at = Instant::now();
         self.metrics.output_tick(dt as f32 * 1000.0);
@@ -170,7 +187,10 @@ impl Engine {
         if let Some(h) = last_hit {
             if self.last_hit_seen != Some(h) {
                 self.last_hit_seen = Some(h);
-                self.metrics.note_hit_latency(sent_at.duration_since(h).as_secs_f32() * 1000.0, woke_by_hit);
+                self.metrics.note_hit_latency(
+                    sent_at.duration_since(h).as_secs_f32() * 1000.0,
+                    woke_by_hit,
+                );
             }
         }
     }
@@ -231,7 +251,9 @@ impl Engine {
         let mut sent = 0;
         let mut errors = Vec::new();
         for ((lv, uni), data) in &self.dmx {
-            let Some(l) = self.output.lumiverses.get(*lv) else { continue };
+            let Some(l) = self.output.lumiverses.get(*lv) else {
+                continue;
+            };
             if !l.enabled {
                 continue;
             }
@@ -257,7 +279,10 @@ impl Engine {
             log::error("dmx", e.clone());
         }
         self.status = if errors.is_empty() {
-            format!("Sending {sent} universe(s) at {:.0} Hz", self.metrics.output_hz())
+            format!(
+                "Sending {sent} universe(s) at {:.0} Hz",
+                self.metrics.output_hz()
+            )
         } else {
             format!("Sending {sent} universe(s) — {}", errors.join("; "))
         };
@@ -267,42 +292,74 @@ impl Engine {
 /// Minimum gap between packets when a hit triggers an early send.
 const MIN_GAP: Duration = Duration::from_millis(4);
 
+/// macOS delays ("coalesces") timers of ordinary background threads to save
+/// power, which made the engine run at ~20 Hz instead of 44. Marking the
+/// thread user-interactive, like audio and UI threads, keeps its timing tight.
+fn raise_thread_priority() {
+    #[cfg(target_vendor = "apple")]
+    {
+        extern "C" {
+            fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+        }
+        const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+        // SAFETY: libSystem call on the current thread with valid arguments.
+        let rc = unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
+        if rc != 0 {
+            log::warn(
+                "engine",
+                format!("couldn't raise engine thread priority (error {rc})"),
+            );
+        }
+    }
+}
+
 /// Run the engine until `shutdown` is set.
 pub fn spawn(engine: Arc<Mutex<Engine>>) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("lumen-engine".into())
-        .spawn(move || loop {
-            let (wake, timeout, send_on_hit) = {
-                let Ok(e) = engine.lock() else { return };
-                if e.shutdown {
-                    return;
-                }
-                let due = e.last_send + e.period();
-                (e.wake.clone(), due.saturating_duration_since(Instant::now()), e.sync.send_on_hit)
-            };
-            let mut woke = !timeout.is_zero() && wake.wait(timeout);
-            if woke && !send_on_hit {
-                // Not sending early: wait out the rest of the period.
-                woke = false;
-                let left = {
-                    let Ok(e) = engine.lock() else { return };
-                    (e.last_send + e.period()).saturating_duration_since(Instant::now())
-                };
-                std::thread::sleep(left);
-            }
-            let Ok(mut e) = engine.lock() else { return };
-            if woke {
-                let since = e.last_send.elapsed();
-                if since < MIN_GAP {
-                    drop(e);
-                    std::thread::sleep(MIN_GAP - since);
-                    let Ok(e2) = engine.lock() else { return };
-                    e = e2;
-                }
-            }
-            e.tick(woke);
+        .spawn(move || {
+            raise_thread_priority();
+            run(engine)
         })
         .expect("spawn engine thread")
+}
+
+fn run(engine: Arc<Mutex<Engine>>) {
+    loop {
+        let (wake, timeout, send_on_hit) = {
+            let Ok(e) = engine.lock() else { return };
+            if e.shutdown {
+                return;
+            }
+            let due = e.last_send + e.period();
+            (
+                e.wake.clone(),
+                due.saturating_duration_since(Instant::now()),
+                e.sync.send_on_hit,
+            )
+        };
+        let mut woke = !timeout.is_zero() && wake.wait(timeout);
+        if woke && !send_on_hit {
+            // Not sending early: wait out the rest of the period.
+            woke = false;
+            let left = {
+                let Ok(e) = engine.lock() else { return };
+                (e.last_send + e.period()).saturating_duration_since(Instant::now())
+            };
+            std::thread::sleep(left);
+        }
+        let Ok(mut e) = engine.lock() else { return };
+        if woke {
+            let since = e.last_send.elapsed();
+            if since < MIN_GAP {
+                drop(e);
+                std::thread::sleep(MIN_GAP - since);
+                let Ok(e2) = engine.lock() else { return };
+                e = e2;
+            }
+        }
+        e.tick(woke);
+    }
 }
 
 #[cfg(test)]
@@ -322,7 +379,12 @@ mod tests {
             let mut e = eng.lock().unwrap();
             let hz = e.metrics.output_hz();
             // ~50 Hz plus extra sends on hits
-            assert!(hz > 40.0, "output {hz} Hz");
+            assert!(
+                hz > 40.0,
+                "output {hz} Hz (render {:.2} ms, mapping {:.2} ms per tick)",
+                e.metrics.render_ms,
+                e.metrics.dmx_ms
+            );
             let kicks = e.bands.hits[0];
             assert!((3..=6).contains(&kicks), "kicks {kicks}");
             // early sends on hits happened and were quick
@@ -368,7 +430,10 @@ mod tests {
         let instant = run(true);
         let waiting = run(false);
         assert!(instant < 8.0, "instant send took {instant} ms");
-        assert!(waiting > instant + 5.0, "instant {instant} ms vs waiting {waiting} ms");
+        assert!(
+            waiting > instant + 5.0,
+            "instant {instant} ms vs waiting {waiting} ms"
+        );
         eprintln!("hit -> DMX: instant {instant:.1} ms, waiting for frame {waiting:.1} ms");
     }
 

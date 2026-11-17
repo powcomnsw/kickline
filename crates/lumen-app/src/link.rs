@@ -22,7 +22,10 @@ impl LinkSync {
     pub const AVAILABLE: bool = true;
 
     pub fn new(bpm: f64) -> Self {
-        LinkSync { link: rusty_link::AblLink::new(bpm), state: rusty_link::SessionState::new() }
+        LinkSync {
+            link: rusty_link::AblLink::new(bpm),
+            state: rusty_link::SessionState::new(),
+        }
     }
 
     pub fn set_enabled(&mut self, on: bool) {
@@ -57,13 +60,21 @@ impl LinkSync {
     pub const AVAILABLE: bool = false;
 
     pub fn new(bpm: f64) -> Self {
-        LinkSync { beat: 0.0, tempo: bpm }
+        LinkSync {
+            beat: 0.0,
+            tempo: bpm,
+        }
     }
 
     pub fn set_enabled(&mut self, _on: bool) {}
 
     pub fn clock(&mut self, _lookahead_us: i64) -> LinkStatus {
-        LinkStatus { enabled: false, peers: 0, tempo: self.tempo, beat: self.beat }
+        LinkStatus {
+            enabled: false,
+            peers: 0,
+            tempo: self.tempo,
+            beat: self.beat,
+        }
     }
 }
 
@@ -101,6 +112,11 @@ mod tests {
         let now = a.clock(0);
         let ahead = a.clock(500_000);
         let expect = 0.5 * now.tempo / 60.0;
-        assert!(((ahead.beat - now.beat) - expect).abs() < 0.05, "{} vs {}", ahead.beat - now.beat, expect);
+        assert!(
+            ((ahead.beat - now.beat) - expect).abs() < 0.05,
+            "{} vs {}",
+            ahead.beat - now.beat,
+            expect
+        );
     }
 }

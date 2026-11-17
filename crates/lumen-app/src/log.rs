@@ -32,11 +32,19 @@ struct Log {
 
 fn log() -> &'static Mutex<Log> {
     static L: OnceLock<Mutex<Log>> = OnceLock::new();
-    L.get_or_init(|| Mutex::new(Log { start: Instant::now(), entries: VecDeque::new() }))
+    L.get_or_init(|| {
+        Mutex::new(Log {
+            start: Instant::now(),
+            entries: VecDeque::new(),
+        })
+    })
 }
 
 pub fn uptime() -> f64 {
-    log().lock().map(|l| l.start.elapsed().as_secs_f64()).unwrap_or(0.0)
+    log()
+        .lock()
+        .map(|l| l.start.elapsed().as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 pub fn push(level: Level, source: &'static str, message: impl Into<String>) {
@@ -53,7 +61,13 @@ pub fn push(level: Level, source: &'static str, message: impl Into<String>) {
     if l.entries.len() >= MAX {
         l.entries.pop_front();
     }
-    l.entries.push_back(Entry { t, level, source, message, count: 1 });
+    l.entries.push_back(Entry {
+        t,
+        level,
+        source,
+        message,
+        count: 1,
+    });
 }
 
 pub fn info(source: &'static str, m: impl Into<String>) {
@@ -67,12 +81,18 @@ pub fn error(source: &'static str, m: impl Into<String>) {
 }
 
 pub fn entries() -> Vec<Entry> {
-    log().lock().map(|l| l.entries.iter().cloned().collect()).unwrap_or_default()
+    log()
+        .lock()
+        .map(|l| l.entries.iter().cloned().collect())
+        .unwrap_or_default()
 }
 
 pub fn counts() -> (usize, usize) {
     let e = entries();
-    (e.iter().filter(|x| x.level == Level::Warn).count(), e.iter().filter(|x| x.level == Level::Error).count())
+    (
+        e.iter().filter(|x| x.level == Level::Warn).count(),
+        e.iter().filter(|x| x.level == Level::Error).count(),
+    )
 }
 
 /// Write panics to a crash file so the next launch can include them in a report.
@@ -81,8 +101,13 @@ pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let (iso, file) = crate::paths::timestamp();
         let bt = std::backtrace::Backtrace::force_capture();
-        let recent: Vec<String> =
-            entries().iter().rev().take(40).rev().map(|e| format!("[{:>8.2}s {:?} {}] {}", e.t, e.level, e.source, e.message)).collect();
+        let recent: Vec<String> = entries()
+            .iter()
+            .rev()
+            .take(40)
+            .rev()
+            .map(|e| format!("[{:>8.2}s {:?} {}] {}", e.t, e.level, e.source, e.message))
+            .collect();
         let text = format!(
             "Lumen {} crashed at {iso}\nOS: {} {}\n\n{info}\n\nBacktrace:\n{bt}\n\nRecent log:\n{}\n",
             env!("CARGO_PKG_VERSION"),
@@ -90,7 +115,10 @@ pub fn install_panic_hook() {
             std::env::consts::ARCH,
             recent.join("\n")
         );
-        let _ = std::fs::write(crate::paths::crash_dir().join(format!("crash-{file}.txt")), text);
+        let _ = std::fs::write(
+            crate::paths::crash_dir().join(format!("crash-{file}.txt")),
+            text,
+        );
         default(info);
     }));
 }
@@ -129,7 +157,10 @@ mod tests {
         error("test-dedup", "boom");
         error("test-dedup", "boom");
         error("test-dedup", "boom");
-        let e: Vec<_> = entries().into_iter().filter(|e| e.source == "test-dedup").collect();
+        let e: Vec<_> = entries()
+            .into_iter()
+            .filter(|e| e.source == "test-dedup")
+            .collect();
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].count, 3);
     }

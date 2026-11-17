@@ -15,9 +15,15 @@ pub fn data_dir() -> PathBuf {
     let d = if cfg!(target_os = "macos") {
         home().join("Library/Application Support/Lumen")
     } else if cfg!(target_os = "windows") {
-        std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(home).join("Lumen")
+        std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(home)
+            .join("Lumen")
     } else {
-        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share")).join("lumen")
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home().join(".local/share"))
+            .join("lumen")
     };
     let _ = std::fs::create_dir_all(&d);
     d
@@ -53,16 +59,27 @@ pub fn reports_dir() -> PathBuf {
 /// Show a file in Finder / Explorer / the file manager.
 pub fn reveal(path: &std::path::Path) {
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+    let _ = std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn();
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("explorer").arg("/select,").arg(path).spawn();
+    let _ = std::process::Command::new("explorer")
+        .arg("/select,")
+        .arg(path)
+        .spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = std::process::Command::new("xdg-open").arg(path.parent().unwrap_or(path)).spawn();
+    let _ = std::process::Command::new("xdg-open")
+        .arg(path.parent().unwrap_or(path))
+        .spawn();
 }
 
 /// UTC timestamp "2026-11-17T04:51:00Z" and a filename-safe "20261117-045100".
 pub fn timestamp() -> (String, String) {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     let (h, m, s) = (rem / 3600, (rem / 60) % 60, rem % 60);

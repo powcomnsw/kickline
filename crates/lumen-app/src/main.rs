@@ -75,7 +75,10 @@ impl DerefMut for View<'_> {
 
 impl LumenApp {
     fn new(gpu: String) -> Self {
-        let engine = Arc::new(Mutex::new(Engine::new(Composition::demo(), AdvancedOutput::demo())));
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Composition::demo(),
+            AdvancedOutput::demo(),
+        )));
         let engine_thread = Some(engine::spawn(engine.clone()));
         LumenApp {
             engine,
@@ -87,7 +90,13 @@ impl LumenApp {
             diag: diagnostics::State::new(gpu),
             export_after: None,
             export_probe_started: false,
-            windows: Windows { advanced_output: false, fixture_editor: false, dmx_monitor: false, audio: false, diagnostics: false },
+            windows: Windows {
+                advanced_output: false,
+                fixture_editor: false,
+                dmx_monitor: false,
+                audio: false,
+                diagnostics: false,
+            },
             ao: Default::default(),
             fe: Default::default(),
             dmx_view: Default::default(),
@@ -98,7 +107,10 @@ impl LumenApp {
 impl View<'_> {
     fn save(&mut self) {
         let path = paths::project_file();
-        let proj = Project { composition: self.e.comp.clone(), output: self.e.output.clone() };
+        let proj = Project {
+            composition: self.e.comp.clone(),
+            output: self.e.output.clone(),
+        };
         match serde_json::to_string_pretty(&proj)
             .map_err(|e| e.to_string())
             .and_then(|s| std::fs::write(&path, s).map_err(|e| e.to_string()))
@@ -109,7 +121,10 @@ impl View<'_> {
             }
             Err(err) => {
                 self.e.status = format!("Save failed: {err}");
-                log::error("project", format!("save to {} failed: {err}", path.display()));
+                log::error(
+                    "project",
+                    format!("save to {} failed: {err}", path.display()),
+                );
             }
         }
     }
@@ -130,7 +145,10 @@ impl View<'_> {
             }
             Err(err) => {
                 self.e.status = format!("Load failed: {err}");
-                log::error("project", format!("load from {} failed: {err}", path.display()));
+                log::error(
+                    "project",
+                    format!("load from {} failed: {err}", path.display()),
+                );
             }
         }
     }
@@ -200,9 +218,15 @@ impl View<'_> {
             if let Some(st) = &self.e.link_status {
                 ui.separator();
                 if st.peers > 0 {
-                    ui.colored_label(Color32::from_rgb(90, 210, 120), format!("Link: {} peer(s), {:.1} BPM", st.peers, st.tempo));
+                    ui.colored_label(
+                        Color32::from_rgb(90, 210, 120),
+                        format!("Link: {} peer(s), {:.1} BPM", st.peers, st.tempo),
+                    );
                 } else {
-                    ui.colored_label(Color32::from_rgb(240, 190, 60), "Link: waiting for rekordbox…");
+                    ui.colored_label(
+                        Color32::from_rgb(240, 190, 60),
+                        "Link: waiting for rekordbox…",
+                    );
                 }
             }
         });
@@ -217,8 +241,15 @@ impl View<'_> {
         util::paint_frame(&painter, resp.rect, frame);
         let aspect = self.e.output.aspect;
         for fx in &self.e.output.fixtures {
-            let pts: Vec<_> = fx.corners(aspect).iter().map(|&(u, v)| util::to_screen(resp.rect, u, v)).collect();
-            painter.add(egui::Shape::closed_line(pts, Stroke::new(1.0, Color32::from_white_alpha(140))));
+            let pts: Vec<_> = fx
+                .corners(aspect)
+                .iter()
+                .map(|&(u, v)| util::to_screen(resp.rect, u, v))
+                .collect();
+            painter.add(egui::Shape::closed_line(
+                pts,
+                Stroke::new(1.0, Color32::from_white_alpha(140)),
+            ));
         }
         ui.add_space(6.0);
         ui.label(format!(
@@ -240,7 +271,10 @@ impl eframe::App for LumenApp {
             return;
         };
         guard.metrics.frame(dt * 1000.0);
-        let mut v = View { e: &mut guard, s: self };
+        let mut v = View {
+            e: &mut guard,
+            s: self,
+        };
         diagnostics::poll(&mut v);
         if let Some(at) = v.export_after {
             let up = log::uptime();
@@ -258,7 +292,10 @@ impl eframe::App for LumenApp {
         }
 
         egui::Panel::top("top").show(ui, |ui| v.top_bar(ui));
-        egui::Panel::right("preview").default_size(360.0).resizable(true).show(ui, |ui| v.preview(ui));
+        egui::Panel::right("preview")
+            .default_size(360.0)
+            .resizable(true)
+            .show(ui, |ui| v.preview(ui));
         egui::CentralPanel::default().show(ui, |ui| clips::ui(&mut v, ui));
 
         let mut open = v.windows.advanced_output;
@@ -320,14 +357,30 @@ impl eframe::App for LumenApp {
 
 fn main() -> eframe::Result {
     log::install_panic_hook();
-    log::info("app", format!("Lumen {} starting on {}/{}", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH));
+    log::info(
+        "app",
+        format!(
+            "Lumen {} starting on {}/{}",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+    );
     let crashes = log::previous_crashes();
     if !crashes.is_empty() {
-        log::warn("app", format!("{} crash report(s) from earlier sessions — see Diagnostics", crashes.len()));
+        log::warn(
+            "app",
+            format!(
+                "{} crash report(s) from earlier sessions — see Diagnostics",
+                crashes.len()
+            ),
+        );
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 800.0]).with_title("Lumen"),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 800.0])
+            .with_title("Lumen"),
         ..Default::default()
     };
     eframe::run_native(
@@ -339,7 +392,10 @@ fn main() -> eframe::Result {
                 .as_ref()
                 .map(|rs| {
                     let i = rs.adapter.get_info();
-                    format!("{} — {:?} ({:?}), driver {} {}", i.name, i.backend, i.device_type, i.driver, i.driver_info)
+                    format!(
+                        "{} — {:?} ({:?}), driver {} {}",
+                        i.name, i.backend, i.device_type, i.driver, i.driver_info
+                    )
                 })
                 .unwrap_or_default();
             log::info("app", format!("graphics: {gpu}"));
@@ -355,7 +411,10 @@ fn main() -> eframe::Result {
 fn apply_args(app: &mut LumenApp, args: &[String]) {
     let engine = app.engine.clone();
     let mut guard = engine.lock().expect("engine");
-    let mut v = View { e: &mut guard, s: app };
+    let mut v = View {
+        e: &mut guard,
+        s: app,
+    };
     for arg in args {
         if let Some(list) = arg.strip_prefix("--open=") {
             for w in list.split(',') {

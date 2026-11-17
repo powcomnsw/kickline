@@ -5,12 +5,31 @@ use lumen_core::{AudioBand, AudioLink, BlendMode, Clip, Effect, Generator, Layer
 
 fn generator_presets() -> Vec<Generator> {
     vec![
-        Generator::Solid { color: [1.0, 1.0, 1.0] },
-        Generator::Rainbow { scale: 1.0, beats_per_cycle: 8.0 },
-        Generator::Plasma { scale: 1.0, speed: 1.0 },
-        Generator::Chase { color: [1.0, 1.0, 1.0], width: 0.25, beats_per_cycle: 2.0 },
-        Generator::Strobe { color: [1.0, 1.0, 1.0], per_beat: 2.0, duty: 0.3 },
-        Generator::AudioFlash { band: AudioBand::Kick, color: [1.0, 1.0, 1.0] },
+        Generator::Solid {
+            color: [1.0, 1.0, 1.0],
+        },
+        Generator::Rainbow {
+            scale: 1.0,
+            beats_per_cycle: 8.0,
+        },
+        Generator::Plasma {
+            scale: 1.0,
+            speed: 1.0,
+        },
+        Generator::Chase {
+            color: [1.0, 1.0, 1.0],
+            width: 0.25,
+            beats_per_cycle: 2.0,
+        },
+        Generator::Strobe {
+            color: [1.0, 1.0, 1.0],
+            per_beat: 2.0,
+            duty: 0.3,
+        },
+        Generator::AudioFlash {
+            band: AudioBand::Kick,
+            color: [1.0, 1.0, 1.0],
+        },
         Generator::Bands,
     ]
 }
@@ -22,7 +41,10 @@ fn clip_menu(ui: &mut egui::Ui, id: (usize, usize), slot: &mut Option<Clip>) {
     ui.horizontal_wrapped(|ui| {
         for g in generator_presets() {
             let current = slot.as_ref().map(|c| c.generator.kind_name());
-            if ui.selectable_label(current == Some(g.kind_name()), g.kind_name()).clicked() {
+            if ui
+                .selectable_label(current == Some(g.kind_name()), g.kind_name())
+                .clicked()
+            {
                 let name = g.kind_name().to_string();
                 *slot = Some(Clip::new(name, g));
             }
@@ -38,7 +60,10 @@ fn clip_menu(ui: &mut egui::Ui, id: (usize, usize), slot: &mut Option<Clip>) {
         Generator::Solid { color } => {
             ui.color_edit_button_rgb(color);
         }
-        Generator::Rainbow { scale, beats_per_cycle } => {
+        Generator::Rainbow {
+            scale,
+            beats_per_cycle,
+        } => {
             ui.add(egui::Slider::new(scale, 0.1..=4.0).text("scale"));
             ui.add(egui::Slider::new(beats_per_cycle, 0.5..=32.0).text("beats / cycle"));
         }
@@ -46,12 +71,20 @@ fn clip_menu(ui: &mut egui::Ui, id: (usize, usize), slot: &mut Option<Clip>) {
             ui.add(egui::Slider::new(scale, 0.1..=4.0).text("scale"));
             ui.add(egui::Slider::new(speed, 0.0..=4.0).text("speed"));
         }
-        Generator::Chase { color, width, beats_per_cycle } => {
+        Generator::Chase {
+            color,
+            width,
+            beats_per_cycle,
+        } => {
             ui.color_edit_button_rgb(color);
             ui.add(egui::Slider::new(width, 0.02..=1.0).text("width"));
             ui.add(egui::Slider::new(beats_per_cycle, 0.25..=16.0).text("beats / cycle"));
         }
-        Generator::Strobe { color, per_beat, duty } => {
+        Generator::Strobe {
+            color,
+            per_beat,
+            duty,
+        } => {
             ui.color_edit_button_rgb(color);
             ui.add(egui::Slider::new(per_beat, 0.25..=8.0).text("flashes / beat"));
             ui.add(egui::Slider::new(duty, 0.05..=0.95).text("on time"));
@@ -100,17 +133,23 @@ fn layer_controls(ui: &mut egui::Ui, li: usize, layer: &mut Layer) {
         ui.add_space(8.0);
         ui.checkbox(&mut layer.bypass, "Bypass");
         ui.add(egui::Slider::new(&mut layer.opacity, 0.0..=1.0).text("Opacity"));
-        egui::ComboBox::from_id_salt(("blend", li)).width(80.0).selected_text(layer.blend.name()).show_ui(ui, |ui| {
-            for m in BlendMode::ALL {
-                ui.selectable_value(&mut layer.blend, m, m.name());
-            }
-        });
+        egui::ComboBox::from_id_salt(("blend", li))
+            .width(80.0)
+            .selected_text(layer.blend.name())
+            .show_ui(ui, |ui| {
+                for m in BlendMode::ALL {
+                    ui.selectable_value(&mut layer.blend, m, m.name());
+                }
+            });
     });
     ui.horizontal_wrapped(|ui| {
         ui.add_space(8.0);
         ui.label("🔊 Opacity follows");
         let mut on = layer.audio_opacity.is_some();
-        let mut link = layer.audio_opacity.unwrap_or(AudioLink { band: AudioBand::Bass, amount: 1.0 });
+        let mut link = layer.audio_opacity.unwrap_or(AudioLink {
+            band: AudioBand::Bass,
+            amount: 1.0,
+        });
         ui.checkbox(&mut on, "");
         ui.add_enabled_ui(on, |ui| {
             band_combo(ui, ("oplink", li), &mut link.band, false);
@@ -120,12 +159,15 @@ fn layer_controls(ui: &mut egui::Ui, li: usize, layer: &mut Layer) {
         ui.separator();
         ui.label("Next clip on");
         let label = layer.advance_on.map(|b| b.name()).unwrap_or("Off");
-        egui::ComboBox::from_id_salt(("adv", li)).width(70.0).selected_text(label).show_ui(ui, |ui| {
-            ui.selectable_value(&mut layer.advance_on, None, "Off");
-            for b in AudioBand::HITS {
-                ui.selectable_value(&mut layer.advance_on, Some(b), b.name());
-            }
-        });
+        egui::ComboBox::from_id_salt(("adv", li))
+            .width(70.0)
+            .selected_text(label)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut layer.advance_on, None, "Off");
+                for b in AudioBand::HITS {
+                    ui.selectable_value(&mut layer.advance_on, Some(b), b.name());
+                }
+            });
     });
 }
 
@@ -143,7 +185,10 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.add_space(118.0);
             for c in 0..cols {
-                if ui.add_sized([96.0, 22.0], egui::Button::new(format!("▶ Col {}", c + 1))).clicked() {
+                if ui
+                    .add_sized([96.0, 22.0], egui::Button::new(format!("▶ Col {}", c + 1)))
+                    .clicked()
+                {
                     column = Some(c);
                 }
             }
@@ -151,10 +196,16 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
         for li in 0..app.e.comp.layers.len() {
             let layer = &mut app.e.comp.layers[li];
             ui.horizontal(|ui| {
-                ui.add_sized([110.0, 30.0], egui::TextEdit::singleline(&mut layer.name).frame(egui::Frame::NONE));
+                ui.add_sized(
+                    [110.0, 30.0],
+                    egui::TextEdit::singleline(&mut layer.name).frame(egui::Frame::NONE),
+                );
                 for ci in 0..layer.clips.len() {
                     let active = layer.active == Some(ci);
-                    let text = layer.clips[ci].as_ref().map(|c| c.name.clone()).unwrap_or_else(|| "—".into());
+                    let text = layer.clips[ci]
+                        .as_ref()
+                        .map(|c| c.name.clone())
+                        .unwrap_or_else(|| "—".into());
                     let resp = ui.add_sized([96.0, 30.0], egui::Button::new(text).selected(active));
                     if resp.clicked() {
                         trigger = Some((li, ci));
@@ -169,45 +220,61 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                 }
             });
             layer_controls(ui, li, layer);
-            ui.collapsing(egui::RichText::new(format!("{} effects ({})", layer.name, layer.effects.len())).small(), |ui| {
-                let mut remove = None;
-                for (ei, e) in layer.effects.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        effect_row(ui, (li, ei), e);
-                        if ui.small_button("✕").clicked() {
-                            remove = Some(ei);
+            ui.collapsing(
+                egui::RichText::new(format!("{} effects ({})", layer.name, layer.effects.len()))
+                    .small(),
+                |ui| {
+                    let mut remove = None;
+                    for (ei, e) in layer.effects.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            effect_row(ui, (li, ei), e);
+                            if ui.small_button("✕").clicked() {
+                                remove = Some(ei);
+                            }
+                        });
+                    }
+                    if let Some(i) = remove {
+                        layer.effects.remove(i);
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.small_button("+ Brightness").clicked() {
+                            layer.effects.push(Effect::Brightness(1.0));
+                        }
+                        if ui.small_button("+ Hue").clicked() {
+                            layer.effects.push(Effect::HueShift(0.0));
+                        }
+                        if ui.small_button("+ Invert").clicked() {
+                            layer.effects.push(Effect::Invert);
+                        }
+                        if ui.small_button("+ Pulse").clicked() {
+                            layer.effects.push(Effect::Pulse {
+                                depth: 0.8,
+                                per_beat: 1.0,
+                            });
+                        }
+                        if ui.small_button("+ Audio brightness").clicked() {
+                            layer.effects.push(Effect::AudioBrightness {
+                                band: AudioBand::Bass,
+                                amount: 1.0,
+                            });
+                        }
+                        if ui.small_button("+ Audio hue").clicked() {
+                            layer.effects.push(Effect::AudioHue {
+                                band: AudioBand::HighMid,
+                                amount: 0.5,
+                            });
                         }
                     });
-                }
-                if let Some(i) = remove {
-                    layer.effects.remove(i);
-                }
-                ui.horizontal_wrapped(|ui| {
-                    if ui.small_button("+ Brightness").clicked() {
-                        layer.effects.push(Effect::Brightness(1.0));
-                    }
-                    if ui.small_button("+ Hue").clicked() {
-                        layer.effects.push(Effect::HueShift(0.0));
-                    }
-                    if ui.small_button("+ Invert").clicked() {
-                        layer.effects.push(Effect::Invert);
-                    }
-                    if ui.small_button("+ Pulse").clicked() {
-                        layer.effects.push(Effect::Pulse { depth: 0.8, per_beat: 1.0 });
-                    }
-                    if ui.small_button("+ Audio brightness").clicked() {
-                        layer.effects.push(Effect::AudioBrightness { band: AudioBand::Bass, amount: 1.0 });
-                    }
-                    if ui.small_button("+ Audio hue").clicked() {
-                        layer.effects.push(Effect::AudioHue { band: AudioBand::HighMid, amount: 0.5 });
-                    }
-                });
-            });
+                },
+            );
             ui.separator();
         }
         if ui.button("+ Layer").clicked() {
             let n = app.e.comp.layers.len() + 1;
-            app.e.comp.layers.insert(0, Layer::new(format!("Layer {n}"), cols));
+            app.e
+                .comp
+                .layers
+                .insert(0, Layer::new(format!("Layer {n}"), cols));
         }
     });
     if let Some((l, c)) = trigger {
