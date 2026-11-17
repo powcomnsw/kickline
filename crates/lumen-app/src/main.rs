@@ -252,7 +252,7 @@ impl View<'_> {
                     }
                 });
                 if i != theme::index() {
-                    theme::set(ui.ctx(), i);
+                    theme::choose(ui.ctx(), i);
                 }
                 ui.label(egui::RichText::new("Theme").color(t.weak));
             });
@@ -430,7 +430,7 @@ fn main() -> eframe::Result {
             if let Some(i) = args.iter().find_map(|a| a.strip_prefix("--theme=")).and_then(|s| s.parse().ok()) {
                 theme::set(&cc.egui_ctx, i);
             } else {
-                theme::apply(&cc.egui_ctx);
+                theme::set(&cc.egui_ctx, theme::saved().unwrap_or(0));
             }
             let mut app = LumenApp::new(gpu);
             apply_args(&mut app, &args);

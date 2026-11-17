@@ -22,6 +22,7 @@ patched DMX fixtures, and the result goes out over Art-Net or sACN.
 
 | Area | Done |
 |---|---|
+| Look | Three dark themes (Tungsten, Gel, Stage) for dark venues, Atkinson Hyperlegible font, live clip thumbnails, colour per layer |
 | Composition | Layers × clip grid, column triggers, opacity / blend / bypass / effects per layer, master, BPM clock, right-click clip editing |
 | Generators | Solid, Rainbow, Strobe, Chase, Plasma, Audio flash, Bands |
 | Effects | Brightness, Hue shift, Invert, Pulse, Audio brightness, Audio hue |
@@ -118,6 +119,9 @@ Lumen's own code is MIT OR Apache-2.0. Builds with Ableton Link (the default
 `link` feature) include Ableton's GPL-2.0-or-later Link library, so those
 binaries are distributed under the GPL. Build with `--no-default-features`
 for a Link-free MIT/Apache build.
+
+Fonts: Atkinson Hyperlegible and IBM Plex Mono, SIL Open Font License 1.1
+(`crates/lumen-app/assets/fonts`).
 
 The built-in fixture definitions come from the [QLC+](https://github.com/mcallegari/qlcplus)
 project (Apache-2.0); see `crates/lumen-fixtures/assets/QLCPLUS-LICENSE.txt`.

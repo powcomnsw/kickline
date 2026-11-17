@@ -110,6 +110,22 @@ pub fn set(ctx: &egui::Context, i: usize) {
     apply(ctx);
 }
 
+fn settings_file() -> std::path::PathBuf {
+    crate::paths::data_dir().join("theme.txt")
+}
+
+/// The theme chosen last time (by name), if any.
+pub fn saved() -> Option<usize> {
+    let name = std::fs::read_to_string(settings_file()).ok()?;
+    PRESETS.iter().position(|t| t.name == name.trim())
+}
+
+/// Switch theme and remember it for next launch.
+pub fn choose(ctx: &egui::Context, i: usize) {
+    set(ctx, i);
+    let _ = std::fs::write(settings_file(), current().name);
+}
+
 /// Atkinson Hyperlegible (designed for low-vision legibility) for text,
 /// IBM Plex Mono for numbers; egui's own fonts stay as fallbacks for symbols.
 pub fn install_fonts(ctx: &egui::Context) {
@@ -165,7 +181,8 @@ pub fn apply(ctx: &egui::Context) {
     for (wv, fill, fg) in [
         (&mut w.inactive, t.raised, t.text),
         (&mut w.hovered, t.hover, t.text),
-        (&mut w.active, t.accent, t.on_accent),
+        // Pressed. egui also uses this text colour for bold/strong labels, so it must be readable on the panel.
+        (&mut w.active, t.hover, t.text),
         (&mut w.open, t.hover, t.text),
     ] {
         wv.bg_fill = fill;
