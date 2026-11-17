@@ -313,6 +313,8 @@ mod tests {
                 rotation: 0.0,
                 snake: false,
                 reverse: false,
+                universe_offset: 0,
+                white: Default::default(),
             }],
         };
         o.render_dmx(frame)[&(0, 0)][..n].to_vec()

@@ -48,7 +48,8 @@ Key decisions:
 - [ ] Gamma / white-point / per-fixture colour calibration
 - [ ] Bilinear sampling and area-averaged sampling for fixtures that cover many pixels
 - [x] Per-lumiverse protocol and target IP
-- [ ] Choose network interface
+- [x] Choose network interface per lumiverse, automatic reconnect
+- [x] Array tool (rows/columns, zig-zag, universe per strip), RGBW white mode
 
 ### M4 — Media and audio
 - [ ] Video / image / GIF clips (ffmpeg or GStreamer), loop and scrub
@@ -57,6 +58,8 @@ Key decisions:
 - [x] Ableton Link tempo/beat sync (rekordbox Performance mode)
 - [x] rekordbox direct capture on macOS 14.2+ (process tap) — needs first test on a real Mac
 - [ ] Pro DJ Link (CDJs / rekordbox Export mode)
+- [x] Colour palettes with automatic changes and crossfade
+- [ ] Cue list / scenes (palette + clips + master saved and recalled)
 - [ ] Parameter modulation: LFOs, envelopes, audio and MIDI as sources
 - [ ] Shader generators/effects (WGSL via wgpu) with hot reload
 - [ ] NDI / Syphon / Spout input
@@ -71,7 +74,7 @@ Key decisions:
 - [ ] Developer ID signing + notarisation (needs an Apple Developer account)
 - [ ] Windows / Linux installers
 
-## Known limitations of v0.5
+## Known limitations of v0.6
 - Imported moving heads light up but don't move yet: pan/tilt are held centred.
 - Drum detection is tuned for four-on-the-floor dance music; use the Tuning sliders for other styles.
 - Loopback capture is built in on Windows only; macOS needs BlackHole/Loopback.

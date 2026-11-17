@@ -8,6 +8,7 @@ pub mod composition;
 pub mod effect;
 pub mod frame;
 pub mod generator;
+pub mod palette;
 
 pub use audio::{AudioBand, AudioBands, AudioLink};
 pub use blend::BlendMode;
@@ -15,3 +16,4 @@ pub use composition::{Clip, Composition, Layer};
 pub use effect::Effect;
 pub use frame::{Frame, Rgba};
 pub use generator::Generator;
+pub use palette::{Paint, Palette, Palettes};

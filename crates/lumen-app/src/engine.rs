@@ -72,6 +72,8 @@ pub struct Engine {
     pub dmx: BTreeMap<(usize, u16), [u8; UNIVERSE_SIZE]>,
     sender: Option<Sender>,
     pub sender_stats: Option<SendStats>,
+    /// Network port state per lumiverse (same order), while sending.
+    pub routes: Vec<lumen_output::RouteState>,
     pub output_enabled: bool,
     pub status: String,
     pub audio: AudioSource,
@@ -98,6 +100,7 @@ impl Engine {
             dmx: BTreeMap::new(),
             sender: None,
             sender_stats: None,
+            routes: Vec::new(),
             output_enabled: false,
             status: "DMX output off".into(),
             audio: AudioSource::Off,
@@ -230,6 +233,7 @@ impl Engine {
                 log::info("dmx", "output off");
             }
             self.sender_stats = None;
+            self.routes.clear();
             self.status = "DMX output off".into();
             return;
         }
@@ -269,12 +273,13 @@ impl Engine {
                 lumen_fixtures::Protocol::ArtNet => lumen_output::Protocol::ArtNet,
                 lumen_fixtures::Protocol::Sacn => lumen_output::Protocol::Sacn,
             };
-            match sender.send(proto, target, *uni, data) {
+            match sender.send_via(proto, target, *uni, data, l.interface.as_deref()) {
                 Ok(()) => sent += 1,
                 Err(e) => errors.push(format!("{}: {e}", l.name)),
             }
         }
         self.sender_stats = Some(sender.stats.clone());
+        self.routes = self.output.lumiverses.iter().map(|l| sender.route_state(l.interface.as_deref())).collect();
         for e in &errors {
             log::error("dmx", e.clone());
         }

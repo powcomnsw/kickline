@@ -3,6 +3,7 @@ use crate::blend::{composite, BlendMode};
 use crate::effect::Effect;
 use crate::frame::Frame;
 use crate::generator::Generator;
+use crate::palette::{Paint, Palettes};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,6 +75,8 @@ pub struct Composition {
     /// Master brightness 0..1.
     pub master: f32,
     pub bpm: f64,
+    #[serde(default)]
+    pub palettes: Palettes,
     #[serde(skip)]
     pub beat: f64,
     #[serde(skip)]
@@ -89,6 +92,7 @@ impl Composition {
             layers: Vec::new(),
             master: 1.0,
             bpm: 120.0,
+            palettes: Palettes::default(),
             beat: 0.0,
             audio: AudioBands::default(),
         }
@@ -101,15 +105,15 @@ impl Composition {
         let mut c = Composition::new(64, 36, cols);
 
         let mut kick = Layer::new("Kick", cols);
-        kick.clips[0] = Some(Clip::new("Kick white", Generator::AudioFlash { band: AudioBand::Kick, color: [1.0, 1.0, 1.0] }));
-        kick.clips[1] = Some(Clip::new("Kick red", Generator::AudioFlash { band: AudioBand::Kick, color: [1.0, 0.0, 0.0] }));
-        kick.clips[2] = Some(Clip::new("Hat blue", Generator::AudioFlash { band: AudioBand::HiHat, color: [0.3, 0.6, 1.0] }));
+        kick.clips[0] = Some(Clip::new("Kick white", Generator::AudioFlash { band: AudioBand::Kick, color: Paint::Rgb([1.0, 1.0, 1.0]) }));
+        kick.clips[1] = Some(Clip::new("Kick red", Generator::AudioFlash { band: AudioBand::Kick, color: Paint::Rgb([1.0, 0.0, 0.0]) }));
+        kick.clips[2] = Some(Clip::new("Hat blue", Generator::AudioFlash { band: AudioBand::HiHat, color: Paint::Rgb([0.3, 0.6, 1.0]) }));
         kick.opacity = 0.7;
 
         let mut fx = Layer::new("Snare chases", cols);
-        fx.clips[0] = Some(Clip::new("White chase", Generator::Chase { color: [1.0, 1.0, 1.0], width: 0.25, beats_per_cycle: 2.0 }));
-        fx.clips[1] = Some(Clip::new("Strobe", Generator::Strobe { color: [1.0, 1.0, 1.0], per_beat: 2.0, duty: 0.3 }));
-        fx.clips[2] = Some(Clip::new("Amber chase", Generator::Chase { color: [1.0, 0.5, 0.0], width: 0.4, beats_per_cycle: 4.0 }));
+        fx.clips[0] = Some(Clip::new("White chase", Generator::Chase { color: Paint::Rgb([1.0, 1.0, 1.0]), width: 0.25, beats_per_cycle: 2.0 }));
+        fx.clips[1] = Some(Clip::new("Strobe", Generator::Strobe { color: Paint::Rgb([1.0, 1.0, 1.0]), per_beat: 2.0, duty: 0.3 }));
+        fx.clips[2] = Some(Clip::new("Palette chase", Generator::Chase { color: Paint::Slot(1), width: 0.4, beats_per_cycle: 4.0 }));
         fx.advance_on = Some(AudioBand::Snare);
         fx.audio_opacity = Some(AudioLink { band: AudioBand::HighMid, amount: 0.6 });
 
@@ -117,9 +121,10 @@ impl Composition {
         bg.blend = BlendMode::Normal;
         bg.clips[0] = Some(Clip::new("Rainbow", Generator::Rainbow { scale: 1.0, beats_per_cycle: 8.0 }));
         bg.clips[1] = Some(Clip::new("Plasma", Generator::Plasma { scale: 1.0, speed: 1.0 }));
-        bg.clips[2] = Some(Clip::new("Red", Generator::Solid { color: [1.0, 0.0, 0.1] }));
-        bg.clips[3] = Some(Clip::new("Blue", Generator::Solid { color: [0.0, 0.2, 1.0] }));
+        bg.clips[2] = Some(Clip::new("Red", Generator::Solid { color: Paint::Rgb([1.0, 0.0, 0.1]) }));
+        bg.clips[3] = Some(Clip::new("Blue", Generator::Solid { color: Paint::Rgb([0.0, 0.2, 1.0]) }));
         bg.clips[4] = Some(Clip::new("Bands", Generator::Bands));
+        bg.clips[5] = Some(Clip::new("Palette wash", Generator::PaletteWash { beats_per_cycle: 16.0 }));
         bg.effects.push(Effect::AudioBrightness { band: AudioBand::Bass, amount: 0.7 });
 
         c.layers.push(kick);
@@ -163,6 +168,7 @@ impl Composition {
     pub fn set_audio(&mut self, mut audio: AudioBands) {
         self.clock_pulses(&mut audio);
         self.audio = audio;
+        self.palettes.update(&audio, self.beat);
         let mut advance = Vec::new();
         for (i, l) in self.layers.iter_mut().enumerate() {
             let Some(slot) = l.advance_on.and_then(AudioBand::hit_slot) else {
@@ -211,6 +217,7 @@ impl Composition {
     pub fn render(&self) -> Frame {
         let mut out = Frame::black(self.width, self.height);
         let mut scratch = Frame::transparent(self.width, self.height);
+        let palette = self.palettes.current(self.beat);
         for layer in self.layers.iter().rev() {
             if layer.bypass {
                 continue;
@@ -218,7 +225,7 @@ impl Composition {
             let Some(Some(clip)) = layer.active.and_then(|i| layer.clips.get(i)) else { continue };
             let local_beat = (self.beat - layer.trigger_beat).max(0.0);
             scratch.pixels.fill(Default::default());
-            clip.generator.render(&mut scratch, local_beat, &self.audio);
+            clip.generator.render(&mut scratch, local_beat, &self.audio, &palette);
             for e in &layer.effects {
                 e.apply(&mut scratch, local_beat, &self.audio);
             }
@@ -252,7 +259,7 @@ mod tests {
         let mut c = Composition::new(2, 2, 2);
         let mut l = Layer::new("L", 2);
         l.blend = BlendMode::Normal;
-        l.clips[1] = Some(Clip::new("w", Generator::Solid { color: [1.0, 1.0, 1.0] }));
+        l.clips[1] = Some(Clip::new("w", Generator::Solid { color: Paint::Rgb([1.0, 1.0, 1.0]) }));
         c.layers.push(l);
         c.trigger(0, 0); // empty slot: ignored
         assert_eq!(c.layers[0].active, None);
@@ -271,8 +278,8 @@ mod tests {
             l.clips[0] = Some(Clip::new("c", Generator::Solid { color: col }));
             l
         };
-        c.layers.push(mk([1.0, 0.0, 0.0])); // top
-        c.layers.push(mk([0.0, 0.0, 1.0])); // bottom
+        c.layers.push(mk(Paint::Rgb([1.0, 0.0, 0.0]))); // top
+        c.layers.push(mk(Paint::Rgb([0.0, 0.0, 1.0]))); // bottom
         c.trigger_column(0);
         let p = c.render().pixels[0];
         assert_eq!((p.r, p.b), (1.0, 0.0));
@@ -283,7 +290,7 @@ mod tests {
         let mut c = Composition::new(1, 1, 1);
         let mut l = Layer::new("L", 1);
         l.blend = BlendMode::Normal;
-        l.clips[0] = Some(Clip::new("w", Generator::Solid { color: [1.0, 1.0, 1.0] }));
+        l.clips[0] = Some(Clip::new("w", Generator::Solid { color: Paint::Rgb([1.0, 1.0, 1.0]) }));
         l.audio_opacity = Some(AudioLink { band: AudioBand::Bass, amount: 1.0 });
         c.layers.push(l);
         c.trigger(0, 0);
@@ -298,8 +305,8 @@ mod tests {
     fn advance_on_snare_skips_empty_and_wraps() {
         let mut c = Composition::new(1, 1, 4);
         let mut l = Layer::new("L", 4);
-        l.clips[0] = Some(Clip::new("a", Generator::Solid { color: [1.0, 0.0, 0.0] }));
-        l.clips[2] = Some(Clip::new("b", Generator::Solid { color: [0.0, 1.0, 0.0] }));
+        l.clips[0] = Some(Clip::new("a", Generator::Solid { color: Paint::Rgb([1.0, 0.0, 0.0]) }));
+        l.clips[2] = Some(Clip::new("b", Generator::Solid { color: Paint::Rgb([0.0, 1.0, 0.0]) }));
         l.advance_on = Some(AudioBand::Snare);
         c.layers.push(l);
         c.trigger(0, 0);
@@ -323,8 +330,8 @@ mod tests {
     fn beat_and_bar_from_clock() {
         let mut c = Composition::new(1, 1, 2);
         let mut l = Layer::new("L", 2);
-        l.clips[0] = Some(Clip::new("a", Generator::Solid { color: [1.0, 0.0, 0.0] }));
-        l.clips[1] = Some(Clip::new("b", Generator::Solid { color: [0.0, 1.0, 0.0] }));
+        l.clips[0] = Some(Clip::new("a", Generator::Solid { color: Paint::Rgb([1.0, 0.0, 0.0]) }));
+        l.clips[1] = Some(Clip::new("b", Generator::Solid { color: Paint::Rgb([0.0, 1.0, 0.0]) }));
         l.advance_on = Some(AudioBand::Bar);
         c.layers.push(l);
         c.trigger(0, 0);
@@ -347,7 +354,7 @@ mod tests {
     fn clock_jump_keeps_clip_time() {
         let mut c = Composition::new(1, 1, 1);
         let mut l = Layer::new("L", 1);
-        l.clips[0] = Some(Clip::new("a", Generator::Solid { color: [1.0, 0.0, 0.0] }));
+        l.clips[0] = Some(Clip::new("a", Generator::Solid { color: Paint::Rgb([1.0, 0.0, 0.0]) }));
         c.layers.push(l);
         c.set_clock(10.0, 120.0);
         c.trigger(0, 0);

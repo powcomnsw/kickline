@@ -430,6 +430,8 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                         rotation: 0.0,
                         snake: false,
                         reverse: false,
+                        universe_offset: 0,
+                        white: Default::default(),
                     });
                     open_output = true;
                     st.message = Some(format!("Added \"{name}\" and placed it at address {address} on {}.", o.lumiverses[lv].name));

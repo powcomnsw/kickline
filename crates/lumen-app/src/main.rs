@@ -320,6 +320,7 @@ impl eframe::App for LumenApp {
             }
         }
 
+        let was_open = [v.windows.advanced_output, v.windows.fixture_editor, v.windows.dmx_monitor, v.windows.audio, v.windows.diagnostics];
         egui::Panel::top("top").show(ui, |ui| v.top_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| v.status_bar(ui));
         egui::Panel::right("preview").default_size(380.0).resizable(true).show(ui, |ui| v.preview(ui));
@@ -365,6 +366,13 @@ impl eframe::App for LumenApp {
             .show(&ctx, |ui| diagnostics::ui(&mut v, ui));
         v.windows.diagnostics = open;
 
+        // A window that was just opened (from a button anywhere) always comes to the front.
+        let now_open = [v.windows.advanced_output, v.windows.fixture_editor, v.windows.dmx_monitor, v.windows.audio, v.windows.diagnostics];
+        for (i, title) in ["Advanced Output", "Fixture Editor", "DMX Monitor", "Audio", "Diagnostics"].iter().enumerate() {
+            if now_open[i] && !was_open[i] {
+                ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, egui::Id::unique(*title)));
+            }
+        }
         drop(guard);
         // The preview only needs ~30 fps; DMX timing is the engine thread's job.
         ctx.request_repaint_after(Duration::from_millis(30));

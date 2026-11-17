@@ -15,18 +15,19 @@ patched DMX fixtures, and the result goes out over Art-Net or sACN.
 | **Advanced Output** — lumiverses, fixtures placed on the composition, live pixel colours | **Fixture library** — 1,781 built-in fixtures (QLC+), shows what each channel does |
 | ![Audio](docs/screenshots/audio.png) | ![Diagnostics](docs/screenshots/diagnostics.png) |
 | **Audio** — bands, kick/snare/hat, Ableton Link, timing | **Diagnostics** — one-click probe and exportable report |
-| ![DMX Monitor](docs/screenshots/dmx-monitor.png) | |
-| **DMX Monitor** — live values of every channel | |
+| ![DMX Monitor](docs/screenshots/dmx-monitor.png) | ![Array tool](docs/screenshots/array.png) |
+| **DMX Monitor** — live values of every channel | **Add array** — 8 zig-zag strips, each on its own universe, in one go |
 
-## Status: v0.5
+## Status: v0.6
 
 | Area | Done |
 |---|---|
 | Look | Three dark themes (Tungsten, Gel, Stage) for dark venues, Atkinson Hyperlegible font, live clip thumbnails, colour per layer |
 | Composition | Layers × clip grid, column triggers, opacity / blend / bypass / effects per layer, master, BPM clock, right-click clip editing |
-| Generators | Solid, Rainbow, Strobe, Chase, Plasma, Audio flash, Bands |
+| Generators | Solid, Rainbow, Strobe, Chase, Plasma, Audio flash, Bands, Palette wash |
+| Colour palettes | Clips use palette colour 1–4 or a fixed colour; 8 starting palettes, editable; change on Bar / Beat / Kick / Snare / Hi-hat (every N) with a crossfade, or by hand |
 | Effects | Brightness, Hue shift, Invert, Pulse, Audio brightness, Audio hue |
-| Advanced Output | Lumiverses (Art-Net / sACN, own universe and IP each), fixtures dragged, resized and rotated on the composition, snake / reverse wiring, auto universe spill, overlap warnings |
+| Advanced Output | Lumiverses (Art-Net / sACN, own universe and IP each), fixtures dragged, resized and rotated on the composition, snake / reverse wiring, auto universe spill, overlap warnings. **Add array** lays out N strips in rows or columns, zig-zag wired, each on its own universe or continuing on, skipping universes another lumiverse already uses. Network port per lumiverse with automatic reconnect (unplug the adapter, plug it back, output resumes). Per-fixture universe, white mode for RGBW (white only / RGB + white / RGB only) and an **Edit type** shortcut |
 | Fixture Editor | Pixel grids (columns × rows), colour order presets, per-pixel and header channels |
 | Fixture library | 1,781 fixtures built in (QLC+ library), search, pick a mode, add and place in one click; import any QLC+ `.qxf` (e.g. from the Open Fixture Library) by dragging it onto the window. RGB/W/A, CMY, UV, dimmers, 16-bit fine channels and multi-pixel heads are driven; shutters are held open, pan/tilt centred |
 | DMX Monitor | Live 512-channel view per universe with fixture boundaries |
@@ -75,6 +76,20 @@ Each layer can react to a different part of the track:
 - **Audio brightness / Audio hue** effects modulate any clip.
 
 The demo project shows one of each. The Audio window lists the current routing.
+
+### Colour palettes
+
+The **Palette** strip above the clips holds four colours. Right-click a clip and
+pick a palette swatch instead of a fixed colour, and it follows the palette.
+Click another palette to recolour the whole show, or set **Change on** to Bar
+(every 4 bars, say) for automatic changes. **Fade** sets the crossfade in beats.
+
+### Live-show networking
+
+Set each lumiverse's **Network port** to the adapter your node is on (e.g. a USB
+Ethernet adapter). Lumen sends only through that port, and if it disappears it
+keeps trying and resumes by itself when it's back. Diagnostics shows the
+state of each port and how many times output recovered.
 
 ## Reporting problems
 

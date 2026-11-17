@@ -3,13 +3,13 @@ use crate::{theme, View};
 use eframe::egui::{Align2, Color32, CornerRadius, FontId, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
 use lumen_core::{AudioBands, Frame};
 use eframe::egui;
-use lumen_core::{AudioBand, AudioLink, BlendMode, Clip, Effect, Generator, Layer};
+use lumen_core::palette::Rgb;
+use lumen_core::{AudioBand, AudioLink, BlendMode, Clip, Effect, Generator, Layer, Paint, Palette};
 
 fn generator_presets() -> Vec<Generator> {
     vec![
-        Generator::Solid {
-            color: [1.0, 1.0, 1.0],
-        },
+        Generator::Solid { color: Paint::Slot(0) },
+        Generator::PaletteWash { beats_per_cycle: 16.0 },
         Generator::Rainbow {
             scale: 1.0,
             beats_per_cycle: 8.0,
@@ -19,25 +19,70 @@ fn generator_presets() -> Vec<Generator> {
             speed: 1.0,
         },
         Generator::Chase {
-            color: [1.0, 1.0, 1.0],
+            color: Paint::Slot(1),
             width: 0.25,
             beats_per_cycle: 2.0,
         },
         Generator::Strobe {
-            color: [1.0, 1.0, 1.0],
+            color: Paint::WHITE,
             per_beat: 2.0,
             duty: 0.3,
         },
         Generator::AudioFlash {
             band: AudioBand::Kick,
-            color: [1.0, 1.0, 1.0],
+            color: Paint::Slot(0),
         },
         Generator::Bands,
     ]
 }
 
 /// Right-click menu on a clip slot: choose the source and edit its settings.
-fn clip_menu(ui: &mut egui::Ui, id: (usize, usize), slot: &mut Option<Clip>) {
+fn c32(c: Rgb) -> Color32 {
+    Color32::from_rgb((c[0].clamp(0.0, 1.0) * 255.0) as u8, (c[1].clamp(0.0, 1.0) * 255.0) as u8, (c[2].clamp(0.0, 1.0) * 255.0) as u8)
+}
+
+/// Colour button that treats the values as the 0..1 levels sent to the LEDs
+/// (egui's own rgb button assumes linear light and shows them too bright).
+fn rgb_button(ui: &mut egui::Ui, c: &mut Rgb) -> egui::Response {
+    let mut b = c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    let r = ui.color_edit_button_srgb(&mut b);
+    if r.changed() {
+        *c = b.map(|v| v as f32 / 255.0);
+    }
+    r
+}
+
+fn swatch(ui: &mut egui::Ui, c: Rgb, size: Vec2, selected: bool) -> egui::Response {
+    let t = theme::current();
+    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
+    ui.painter().rect_filled(r, 3.0, c32(c));
+    let stroke = if selected { Stroke::new(2.5, t.text) } else if resp.hovered() { Stroke::new(1.5, t.weak) } else { Stroke::new(1.0, t.line) };
+    ui.painter().rect_stroke(r, 3.0, stroke, StrokeKind::Outside);
+    resp
+}
+
+/// Colour picker for a clip: one of the four palette colours, or a fixed colour.
+fn paint_edit(ui: &mut egui::Ui, paint: &mut Paint, palette: &[Rgb; 4]) {
+    ui.horizontal(|ui| {
+        ui.label("Colour");
+        for i in 0..4u8 {
+            let sel = *paint == Paint::Slot(i);
+            if swatch(ui, palette[i as usize], Vec2::new(22.0, 22.0), sel).on_hover_text(format!("Palette colour {} (follows palette changes)", i + 1)).clicked() {
+                *paint = Paint::Slot(i);
+            }
+        }
+        ui.separator();
+        let mut fixed = paint.resolve(palette);
+        let was_fixed = matches!(paint, Paint::Rgb(_));
+        let r = rgb_button(ui, &mut fixed).on_hover_text("A fixed colour that ignores the palette");
+        if r.changed() || (r.clicked() && !was_fixed) {
+            *paint = Paint::Rgb(fixed);
+        }
+        ui.label(RichText::new(if was_fixed { "fixed" } else { "palette" }).color(theme::current().weak));
+    });
+}
+
+fn clip_menu(ui: &mut egui::Ui, id: (usize, usize), slot: &mut Option<Clip>, palette: &[Rgb; 4]) {
     ui.set_min_width(240.0);
     ui.label("Source");
     ui.horizontal_wrapped(|ui| {
@@ -59,8 +104,10 @@ fn clip_menu(ui: &mut egui::Ui, id: (usize, usize), slot: &mut Option<Clip>) {
         ui.text_edit_singleline(&mut clip.name);
     });
     match &mut clip.generator {
-        Generator::Solid { color } => {
-            ui.color_edit_button_rgb(color);
+        Generator::Solid { color } => paint_edit(ui, color, palette),
+        Generator::PaletteWash { beats_per_cycle } => {
+            ui.label("The four palette colours, blending into each other.");
+            ui.add(egui::Slider::new(beats_per_cycle, 1.0..=64.0).text("beats / drift"));
         }
         Generator::Rainbow {
             scale,
@@ -78,7 +125,7 @@ fn clip_menu(ui: &mut egui::Ui, id: (usize, usize), slot: &mut Option<Clip>) {
             width,
             beats_per_cycle,
         } => {
-            ui.color_edit_button_rgb(color);
+            paint_edit(ui, color, palette);
             ui.add(egui::Slider::new(width, 0.02..=1.0).text("width"));
             ui.add(egui::Slider::new(beats_per_cycle, 0.25..=16.0).text("beats / cycle"));
         }
@@ -87,7 +134,7 @@ fn clip_menu(ui: &mut egui::Ui, id: (usize, usize), slot: &mut Option<Clip>) {
             per_beat,
             duty,
         } => {
-            ui.color_edit_button_rgb(color);
+            paint_edit(ui, color, palette);
             ui.add(egui::Slider::new(per_beat, 0.25..=8.0).text("flashes / beat"));
             ui.add(egui::Slider::new(duty, 0.05..=0.95).text("on time"));
         }
@@ -95,8 +142,8 @@ fn clip_menu(ui: &mut egui::Ui, id: (usize, usize), slot: &mut Option<Clip>) {
             ui.horizontal(|ui| {
                 ui.label("Follows");
                 band_combo(ui, ("flashband", id), band, false);
-                ui.color_edit_button_rgb(color);
             });
+            paint_edit(ui, color, palette);
         }
         Generator::Bands => {
             ui.label("Sub, bass, low mid, high mid and highs as coloured bars.");
@@ -177,7 +224,7 @@ const CELL: Vec2 = Vec2::new(104.0, 60.0);
 const NAME_W: f32 = 140.0;
 
 /// One clip slot: a live mini-preview of the clip with its name on top.
-fn clip_cell(ui: &mut egui::Ui, clip: Option<&Clip>, active: bool, color: Color32, beat: f64, audio: &AudioBands) -> egui::Response {
+fn clip_cell(ui: &mut egui::Ui, clip: Option<&Clip>, active: bool, color: Color32, beat: f64, audio: &AudioBands, palette: &[Rgb; 4]) -> egui::Response {
     let t = theme::current();
     let (rect, resp) = ui.allocate_exact_size(CELL, Sense::click());
     let p = ui.painter_at(rect);
@@ -192,7 +239,7 @@ fn clip_cell(ui: &mut egui::Ui, clip: Option<&Clip>, active: bool, color: Color3
         Some(c) => {
             // Render the clip itself, small, as its thumbnail.
             let mut f = Frame::transparent(32, 18);
-            c.generator.render(&mut f, beat, audio);
+            c.generator.render(&mut f, beat, audio, palette);
             let inner = rect;
             p.rect_filled(inner, radius, Color32::BLACK);
             let (cw, ch) = (inner.width() / f.width as f32, inner.height() / f.height as f32);
@@ -243,6 +290,9 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
     let cols = app.e.comp.columns;
     let beat = app.e.comp.beat;
     let audio = app.e.comp.audio;
+    let palette = app.e.comp.palettes.current(beat);
+    palette_bar(app, ui);
+    ui.add_space(6.0);
     egui::ScrollArea::both().show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(NAME_W + 8.0);
@@ -281,11 +331,11 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                     for ci in 0..layer.clips.len() {
                         let active = layer.active == Some(ci);
                         let b = if active { local } else { beat };
-                        let resp = clip_cell(ui, layer.clips[ci].as_ref(), active, color, b, &audio);
+                        let resp = clip_cell(ui, layer.clips[ci].as_ref(), active, color, b, &audio, &palette);
                         if resp.clicked() {
                             trigger = Some((li, ci));
                         }
-                        resp.context_menu(|ui| clip_menu(ui, (li, ci), &mut layer.clips[ci]));
+                        resp.context_menu(|ui| clip_menu(ui, (li, ci), &mut layer.clips[ci], &palette));
                     }
                 });
                 ui.add_space(2.0);
@@ -347,5 +397,88 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
     }
     if let Some(l) = remove_layer {
         app.e.comp.layers.remove(l);
+    }
+}
+
+const CHANGE_ON: [Option<AudioBand>; 6] = [None, Some(AudioBand::Bar), Some(AudioBand::Beat), Some(AudioBand::Kick), Some(AudioBand::Snare), Some(AudioBand::HiHat)];
+
+fn change_on_name(b: Option<AudioBand>) -> &'static str {
+    match b {
+        None => "Only when I pick",
+        Some(AudioBand::Bar) => "Bar",
+        Some(AudioBand::Beat) => "Beat",
+        Some(AudioBand::Kick) => "Kick",
+        Some(AudioBand::Snare) => "Snare",
+        Some(AudioBand::HiHat) => "Hi-hat",
+        Some(_) => "?",
+    }
+}
+
+/// The palette strip above the clips: pick a palette, edit its colours,
+/// and choose when Lumen moves on to the next one.
+fn palette_bar(app: &mut View, ui: &mut egui::Ui) {
+    let t = theme::current();
+    let beat = app.e.comp.beat;
+    let pals = &mut app.e.comp.palettes;
+    let mut pick = None;
+    egui::Frame::new().fill(t.panel).corner_radius(CornerRadius::same(t.radius + 2)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Palette").font(theme::bold(t.text_size)));
+            ui.add_space(4.0);
+            for (i, p) in pals.list.iter().enumerate() {
+                let active = i == pals.active;
+                let size = Vec2::new(64.0, 26.0);
+                let (r, resp) = ui.allocate_exact_size(size, Sense::click());
+                let w = r.width() / 4.0;
+                for (k, c) in p.colors.iter().enumerate() {
+                    let cr = Rect::from_min_size(r.min + Vec2::new(k as f32 * w, 0.0), Vec2::new(w, r.height()));
+                    let rad = CornerRadius { nw: if k == 0 { 3 } else { 0 }, sw: if k == 0 { 3 } else { 0 }, ne: if k == 3 { 3 } else { 0 }, se: if k == 3 { 3 } else { 0 } };
+                    ui.painter().rect_filled(cr, rad, c32(*c));
+                }
+                let stroke = if active { Stroke::new(2.5, t.text) } else if resp.hovered() { Stroke::new(1.5, t.weak) } else { Stroke::new(1.0, t.line) };
+                ui.painter().rect_stroke(r, 3.0, stroke, StrokeKind::Outside);
+                let resp = resp.on_hover_text(&p.name);
+                if resp.clicked() {
+                    pick = Some(i);
+                }
+            }
+            if ui.button("Next ⏵").on_hover_text("Move to the next palette").clicked() {
+                pick = Some(pals.active + 1);
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            if let Some(p) = pals.list.get_mut(pals.active) {
+                ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(90.0));
+                for c in p.colors.iter_mut() {
+                    rgb_button(ui, c);
+                }
+            }
+            if ui.small_button("Duplicate").on_hover_text("Copy this palette to make your own").clicked() {
+                if let Some(p) = pals.list.get(pals.active).cloned() {
+                    pals.list.insert(pals.active + 1, Palette { name: format!("{} copy", p.name), ..p });
+                    pick = Some(pals.active + 1);
+                }
+            }
+            if pals.list.len() > 1 && ui.small_button("Remove").clicked() {
+                pals.list.remove(pals.active);
+                pals.active = pals.active.min(pals.list.len() - 1);
+            }
+            ui.separator();
+            ui.label(RichText::new("Change on").color(t.weak));
+            egui::ComboBox::from_id_salt("pal_change_on").selected_text(change_on_name(pals.advance_on)).show_ui(ui, |ui| {
+                for b in CHANGE_ON {
+                    ui.selectable_value(&mut pals.advance_on, b, change_on_name(b));
+                }
+            });
+            if pals.advance_on.is_some() {
+                ui.label(RichText::new("every").color(t.weak));
+                ui.add(egui::DragValue::new(&mut pals.every).range(1..=64));
+            }
+            ui.label(RichText::new("Fade").color(t.weak));
+            ui.add(egui::DragValue::new(&mut pals.fade_beats).range(0.0..=16.0).speed(0.05).suffix(" beats"));
+        });
+    });
+    if let Some(i) = pick {
+        pals.select(i, beat);
     }
 }

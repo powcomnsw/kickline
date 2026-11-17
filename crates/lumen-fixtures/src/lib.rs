@@ -144,7 +144,7 @@ struct PixelColor {
 impl PixelColor {
     /// `funcs` = the channels this pixel has; decides white/amber extraction
     /// and whether a dimmer carries the brightness.
-    fn new(c: Rgba, funcs: &[ChannelFn]) -> Self {
+    fn with_white(c: Rgba, funcs: &[ChannelFn], mode: WhiteMode) -> Self {
         let (mut r, mut g, mut b) = (c.r.clamp(0.0, 1.0), c.g.clamp(0.0, 1.0), c.b.clamp(0.0, 1.0));
         let max = r.max(g).max(b);
         if funcs.contains(&ChannelFn::Dimmer) && max > 0.0 {
@@ -152,10 +152,13 @@ impl PixelColor {
             g /= max;
             b /= max;
         }
-        let white = if funcs.contains(&ChannelFn::White) { r.min(g).min(b) } else { 0.0 };
-        r -= white;
-        g -= white;
-        b -= white;
+        let has_white = funcs.contains(&ChannelFn::White) && mode != WhiteMode::RgbOnly;
+        let white = if has_white { r.min(g).min(b) } else { 0.0 };
+        if mode != WhiteMode::RgbPlusWhite {
+            r -= white;
+            g -= white;
+            b -= white;
+        }
         // Amber takes what red and green share after white is removed.
         let amber = if funcs.contains(&ChannelFn::Amber) { r.min(g * 2.0) * 0.5 } else { 0.0 };
         PixelColor { r, g, b, white, amber, max }
@@ -226,8 +229,8 @@ impl FixtureType {
             .collect()
     }
 
-    fn encode_pixel(&self, c: Rgba, out: &mut Vec<u8>) {
-        let pc = PixelColor::new(c, &self.pixel);
+    fn encode_pixel(&self, c: Rgba, white: WhiteMode, out: &mut Vec<u8>) {
+        let pc = PixelColor::with_white(c, &self.pixel, white);
         for ch in &self.pixel {
             out.push(match *ch {
                 ChannelFn::Fixed(v) => v,
@@ -237,13 +240,13 @@ impl FixtureType {
     }
 
     /// Encode an imported fixture: `colors[i]` is pixel i's sampled colour.
-    fn encode_slots(&self, slots: &[Slot], colors: &[Rgba], out: &mut Vec<u8>) {
+    fn encode_slots(&self, slots: &[Slot], colors: &[Rgba], white: WhiteMode, out: &mut Vec<u8>) {
         let n = colors.len().max(1);
         let funcs: Vec<Vec<ChannelFn>> = (0..n)
             .map(|p| slots.iter().filter(|s| s.pixel == Some(p)).map(|s| s.func).collect())
             .collect();
         let pcs: Vec<PixelColor> =
-            (0..n).map(|p| PixelColor::new(colors.get(p).copied().unwrap_or(Rgba::BLACK), &funcs[p])).collect();
+            (0..n).map(|p| PixelColor::with_white(colors.get(p).copied().unwrap_or(Rgba::BLACK), &funcs[p], white)).collect();
         // Whole-fixture colour channels get the average of all pixels.
         let avg = {
             let mut a = Rgba::TRANSPARENT;
@@ -253,7 +256,7 @@ impl FixtureType {
                 a.b += c.b / n as f32;
             }
             let global: Vec<ChannelFn> = slots.iter().filter(|s| s.pixel.is_none()).map(|s| s.func).collect();
-            PixelColor::new(Rgba::rgb(a.r, a.g, a.b), &global)
+            PixelColor::with_white(Rgba::rgb(a.r, a.g, a.b), &global, white)
         };
         let pixels_have_colour = funcs.iter().any(|f| f.iter().any(|x| !matches!(x, ChannelFn::Fixed(_) | ChannelFn::Dimmer)));
         for s in slots {
@@ -296,11 +299,21 @@ pub struct Lumiverse {
     /// Art-Net port-address, 0-based. sACN universe = this + 1.
     pub universe: u16,
     pub enabled: bool,
+    /// Network port to send through, by name ("en5"); None = let the computer choose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface: Option<String>,
 }
 
 impl Lumiverse {
     pub fn new(name: &str, universe: u16) -> Self {
-        Lumiverse { name: name.into(), protocol: Protocol::ArtNet, target: "255.255.255.255".into(), universe, enabled: true }
+        Lumiverse {
+            name: name.into(),
+            protocol: Protocol::ArtNet,
+            target: "255.255.255.255".into(),
+            universe,
+            enabled: true,
+            interface: None,
+        }
     }
 }
 
@@ -324,6 +337,36 @@ pub struct Fixture {
     /// Reverse pixel order.
     #[serde(default)]
     pub reverse: bool,
+    /// Universe within the lumiverse to start on (0 = the lumiverse's own universe).
+    #[serde(default)]
+    pub universe_offset: u16,
+    /// How RGBW fixtures use their white emitter.
+    #[serde(default)]
+    pub white: WhiteMode,
+}
+
+/// How a fixture with a white emitter makes white.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WhiteMode {
+    /// White comes only from the white emitter; dimming white dims W cleanly.
+    #[default]
+    WhiteOnly,
+    /// White emitter plus full RGB: brightest, slightly cooler/mixed white.
+    RgbPlusWhite,
+    /// Ignore the white emitter.
+    RgbOnly,
+}
+
+impl WhiteMode {
+    pub const ALL: [WhiteMode; 3] = [WhiteMode::WhiteOnly, WhiteMode::RgbPlusWhite, WhiteMode::RgbOnly];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            WhiteMode::WhiteOnly => "White emitter only",
+            WhiteMode::RgbPlusWhite => "RGB + white (brightest)",
+            WhiteMode::RgbOnly => "RGB only",
+        }
+    }
 }
 
 impl Fixture {
@@ -452,6 +495,8 @@ impl AdvancedOutput {
             rotation: 0.0,
             snake: false,
             reverse: false,
+            universe_offset: 0,
+            white: Default::default(),
         };
         o.fixtures.push(strip("Strip top", 0.62, 1));
         o.fixtures.push(strip("Strip bottom", 0.78, 181));
@@ -468,6 +513,8 @@ impl AdvancedOutput {
                 rotation: 0.0,
                 snake: false,
                 reverse: false,
+                universe_offset: 0,
+                white: Default::default(),
             });
         }
         o.fixtures.push(Fixture {
@@ -482,6 +529,8 @@ impl AdvancedOutput {
             rotation: 0.0,
             snake: true,
             reverse: false,
+            universe_offset: 0,
+            white: Default::default(),
         });
         o
     }
@@ -492,7 +541,7 @@ impl AdvancedOutput {
     pub fn layout(&self, fx: &Fixture) -> Vec<Segment> {
         let Some(t) = self.types.get(fx.type_id) else { return Vec::new() };
         let mut segs = Vec::new();
-        let mut uni = 0u16;
+        let mut uni = fx.universe_offset;
         let mut addr = (fx.address.max(1) - 1) as usize;
         let mut place = |len: usize, segs: &mut Vec<Segment>| {
             if len == 0 || len > UNIVERSE_SIZE {
@@ -528,7 +577,7 @@ impl AdvancedOutput {
                 let colors: Vec<Rgba> =
                     fx.pixel_local(t).into_iter().map(|(lx, ly)| fx.sample_cell(self.aspect, t, frame, lx, ly)).collect();
                 bytes.clear();
-                t.encode_slots(slots, &colors, &mut bytes);
+                t.encode_slots(slots, &colors, fx.white, &mut bytes);
                 write(&mut out, fx.lumiverse, lv.universe + seg.universe_offset, seg.start, &bytes);
                 continue;
             }
@@ -550,7 +599,7 @@ impl AdvancedOutput {
             for (lx, ly) in fx.pixel_local(t) {
                 let Some(seg) = seg_iter.next() else { break };
                 bytes.clear();
-                t.encode_pixel(fx.sample_cell(self.aspect, t, frame, lx, ly), &mut bytes);
+                t.encode_pixel(fx.sample_cell(self.aspect, t, frame, lx, ly), fx.white, &mut bytes);
                 write(&mut out, fx.lumiverse, lv.universe + seg.universe_offset, seg.start, &bytes);
             }
         }
@@ -561,16 +610,19 @@ impl AdvancedOutput {
     pub fn conflicts(&self) -> Vec<(usize, usize)> {
         let mut used: BTreeMap<(usize, u16, usize), usize> = BTreeMap::new();
         let mut out = Vec::new();
+        // Lumiverses that reach the same devices share channel space.
+        let group = |l: usize| (0..=l).find(|&j| j == l || self.same_wire(j, l)).unwrap_or(l);
         for (i, fx) in self.fixtures.iter().enumerate() {
             let Some(lv) = self.lumiverses.get(fx.lumiverse) else { continue };
+            let g = group(fx.lumiverse);
             for s in self.layout(fx) {
                 for ch in s.start..s.start + s.len {
-                    if let Some(&j) = used.get(&(fx.lumiverse, lv.universe + s.universe_offset, ch)) {
+                    if let Some(&j) = used.get(&(g, lv.universe + s.universe_offset, ch)) {
                         if j != i && !out.contains(&(j, i)) {
                             out.push((j, i));
                         }
                     } else {
-                        used.insert((fx.lumiverse, lv.universe + s.universe_offset, ch), i);
+                        used.insert((g, lv.universe + s.universe_offset, ch), i);
                     }
                 }
             }
@@ -599,6 +651,138 @@ impl AdvancedOutput {
             }
         }
         (end % UNIVERSE_SIZE + 1) as u16
+    }
+
+    /// Where a fixture's last channel ends: (universe offset, 0-based channel after it).
+    fn end_of(&self, fx: &Fixture) -> Option<(u16, usize)> {
+        self.layout(fx).last().map(|s| (s.universe_offset, s.start + s.len))
+    }
+
+    /// First universe offset on a lumiverse that nothing uses yet.
+    pub fn next_free_universe(&self, lumiverse: usize) -> u16 {
+        self.fixtures
+            .iter()
+            .filter(|f| f.lumiverse == lumiverse)
+            .filter_map(|f| self.end_of(f))
+            .map(|(u, _)| u + 1)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Next free (universe offset, 1-based address) after everything on a lumiverse.
+    pub fn next_free_slot(&self, lumiverse: usize) -> (u16, u16) {
+        let end = self
+            .fixtures
+            .iter()
+            .filter(|f| f.lumiverse == lumiverse)
+            .filter_map(|f| self.end_of(f))
+            .max();
+        match end {
+            None => (0, 1),
+            Some((u, ch)) if ch >= UNIVERSE_SIZE => (u + 1, 1),
+            Some((u, ch)) => (u, ch as u16 + 1),
+        }
+    }
+
+    /// Could two lumiverses' packets land on the same device? Same protocol and
+    /// either sACN (universes are network-wide), the same target, or a broadcast.
+    pub fn same_wire(&self, a: usize, b: usize) -> bool {
+        let (Some(x), Some(y)) = (self.lumiverses.get(a), self.lumiverses.get(b)) else { return false };
+        if x.protocol != y.protocol {
+            return false;
+        }
+        let bcast = |t: &str| t.trim().ends_with(".255");
+        x.protocol == Protocol::Sacn || x.target.trim() == y.target.trim() || bcast(&x.target) || bcast(&y.target)
+    }
+
+    /// Absolute universes that other lumiverses on the same wire already use:
+    /// their base universe plus everything their fixtures fill.
+    pub fn universes_taken_by_others(&self, lumiverse: usize) -> std::collections::HashSet<u16> {
+        let mut out = std::collections::HashSet::new();
+        for (i, l) in self.lumiverses.iter().enumerate() {
+            if i == lumiverse || !self.same_wire(i, lumiverse) {
+                continue;
+            }
+            out.insert(l.universe);
+            for fx in self.fixtures.iter().filter(|f| f.lumiverse == i) {
+                for s in self.layout(fx) {
+                    out.insert(l.universe + s.universe_offset);
+                }
+            }
+        }
+        out
+    }
+
+    /// Lay out a row/column of identical fixtures in one go. Returns the new fixtures' indices.
+    pub fn add_array(&mut self, spec: &ArraySpec) -> std::ops::Range<usize> {
+        let first = self.fixtures.len();
+        let n = spec.count.max(1);
+        let (x0, y0, x1, y1) = spec.area;
+        let taken = self.universes_taken_by_others(spec.lumiverse);
+        let (mut uni, mut addr) = match spec.addressing {
+            Addressing::Continue => self.next_free_slot(spec.lumiverse),
+            Addressing::UniversePerFixture => (self.next_free_universe(spec.lumiverse), 1),
+        };
+        for i in 0..n {
+            let k = (i as f32 + 0.5) / n as f32;
+            let (x, y, w, h, rotation) = match spec.direction {
+                ArrayDirection::Rows => {
+                    let pitch = (y1 - y0) / n as f32;
+                    ((x0 + x1) / 2.0, y0 + k * (y1 - y0), x1 - x0, spec.thickness.min(pitch * 0.8), 0.0)
+                }
+                ArrayDirection::Columns => {
+                    // Rotated 90°: length runs down the canvas, pixel 1 at the top.
+                    let pitch = (x1 - x0) / n as f32;
+                    let len = (y1 - y0) / self.aspect.max(0.01);
+                    (x0 + k * (x1 - x0), (y0 + y1) / 2.0, len, spec.thickness.min(pitch * 0.8 * self.aspect), 90.0)
+                }
+            };
+            let mut fx = Fixture {
+                name: format!("{} {}", spec.name, i + 1),
+                type_id: spec.type_id,
+                lumiverse: spec.lumiverse,
+                address: addr,
+                x,
+                y,
+                w,
+                h,
+                rotation,
+                snake: false,
+                reverse: spec.zigzag && i % 2 == 1,
+                universe_offset: uni,
+                white: WhiteMode::default(),
+            };
+            // Never land on a universe another lumiverse already sends.
+            let base = self.lumiverses.get(spec.lumiverse).map(|l| l.universe).unwrap_or(0);
+            while self.layout(&fx).iter().any(|s| taken.contains(&(base + s.universe_offset))) && fx.universe_offset < 32_000 {
+                fx.universe_offset += 1;
+                fx.address = 1;
+            }
+            let end = self.end_of(&fx);
+            self.fixtures.push(fx);
+            if let Some((u, ch)) = end {
+                match spec.addressing {
+                    Addressing::Continue if ch >= UNIVERSE_SIZE => (uni, addr) = (u + 1, 1),
+                    Addressing::Continue => (uni, addr) = (u, ch as u16 + 1),
+                    Addressing::UniversePerFixture => (uni, addr) = (u + 1, 1),
+                }
+            }
+        }
+        first..self.fixtures.len()
+    }
+
+    /// Absolute universes used by fixtures in `range` (for previews).
+    pub fn universes_of(&self, range: std::ops::Range<usize>) -> Option<(u16, u16)> {
+        let mut lo = u16::MAX;
+        let mut hi = 0;
+        for fx in &self.fixtures[range] {
+            let base = self.lumiverses.get(fx.lumiverse).map(|l| l.universe).unwrap_or(0);
+            for s in self.layout(fx) {
+                lo = lo.min(base + s.universe_offset);
+                hi = hi.max(base + s.universe_offset);
+            }
+        }
+        (lo <= hi).then_some((lo, hi))
     }
 
     pub fn type_in_use(&self, type_id: usize) -> bool {
@@ -636,6 +820,38 @@ impl AdvancedOutput {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArrayDirection {
+    /// Horizontal strips stacked top to bottom.
+    Rows,
+    /// Vertical strips side by side, left to right.
+    Columns,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Addressing {
+    /// Each fixture starts right after the previous one (spilling into the next universe).
+    Continue,
+    /// Each fixture starts at channel 1 of its own universe, as most pixel controllers expect.
+    UniversePerFixture,
+}
+
+#[derive(Clone, Debug)]
+pub struct ArraySpec {
+    pub name: String,
+    pub type_id: usize,
+    pub lumiverse: usize,
+    pub count: usize,
+    pub direction: ArrayDirection,
+    /// x0, y0, x1, y1 on the canvas (0..1).
+    pub area: (f32, f32, f32, f32),
+    /// Every other fixture runs the opposite way (snake wiring between strips).
+    pub zigzag: bool,
+    pub addressing: Addressing,
+    /// Strip thickness on the canvas.
+    pub thickness: f32,
+}
+
 fn write(out: &mut BTreeMap<(usize, u16), [u8; UNIVERSE_SIZE]>, lv: usize, uni: u16, start: usize, data: &[u8]) {
     let buf = out.entry((lv, uni)).or_insert([0; UNIVERSE_SIZE]);
     buf[start..start + data.len()].copy_from_slice(data);
@@ -662,6 +878,8 @@ mod tests {
             rotation: 0.0,
             snake: false,
             reverse: false,
+            universe_offset: 0,
+            white: Default::default(),
         }
     }
 
@@ -788,6 +1006,110 @@ mod tests {
         assert!(o.remove_lumiverse(0));
         assert!(o.fixtures.iter().all(|f| f.lumiverse == 0));
         assert!(!o.remove_lumiverse(0)); // last one stays
+    }
+
+    fn strips(n_px: usize) -> AdvancedOutput {
+        AdvancedOutput {
+            aspect: 1.0,
+            lumiverses: vec![Lumiverse::new("Ctrl", 10)],
+            types: vec![FixtureType::new("strip", n_px, 1, "RGB")],
+            fixtures: vec![],
+        }
+    }
+
+    fn spec(count: usize, addressing: Addressing, direction: ArrayDirection, zigzag: bool) -> ArraySpec {
+        ArraySpec {
+            name: "Strip".into(),
+            type_id: 0,
+            lumiverse: 0,
+            count,
+            direction,
+            area: (0.1, 0.1, 0.9, 0.9),
+            zigzag,
+            addressing,
+            thickness: 0.04,
+        }
+    }
+
+    #[test]
+    fn array_universe_per_strip() {
+        let mut o = strips(150);
+        let r = o.add_array(&spec(4, Addressing::UniversePerFixture, ArrayDirection::Rows, true));
+        assert_eq!(r, 0..4);
+        let labels: Vec<String> = o.fixtures.iter().map(|f| o.range_label(f)).collect();
+        assert_eq!(labels, ["U10 1-450", "U11 1-450", "U12 1-450", "U13 1-450"]);
+        assert_eq!(o.fixtures.iter().map(|f| f.reverse).collect::<Vec<_>>(), [false, true, false, true]);
+        assert!(o.fixtures[0].y < o.fixtures[3].y);
+        assert_eq!(o.universes_of(r), Some((10, 13)));
+        assert!(o.conflicts().is_empty());
+        // A second array continues on the next free universe.
+        let r2 = o.add_array(&spec(1, Addressing::UniversePerFixture, ArrayDirection::Rows, false));
+        assert_eq!(o.range_label(&o.fixtures[r2.start]), "U14 1-450");
+    }
+
+    #[test]
+    fn array_continue_spills_without_splitting_pixels() {
+        let mut o = strips(100); // 300 ch each
+        o.add_array(&spec(3, Addressing::Continue, ArrayDirection::Columns, false));
+        let labels: Vec<String> = o.fixtures.iter().map(|f| o.range_label(f)).collect();
+        // 1-300; then 301-510 + spill 1-90; then 91-390
+        assert_eq!(labels, ["U10 1-300", "U10 301-510, U11 1-90", "U11 91-390"]);
+        assert!(o.conflicts().is_empty());
+        assert_eq!(o.fixtures[0].rotation, 90.0);
+        assert!(o.fixtures[0].x < o.fixtures[2].x);
+        // vertical strip covers the area's height: top pixel near y0
+        let (_, top) = o.fixtures[0].pixel_positions(1.0, &o.types[0])[0];
+        assert!(top < 0.15, "{top}");
+    }
+
+    #[test]
+    fn array_skips_universes_other_lumiverses_use() {
+        let mut o = strips(150);
+        o.lumiverses[0].target = "2.0.0.50".into();
+        let mut pars = Lumiverse::new("Pars", 12);
+        pars.target = "2.0.0.50".into();
+        o.lumiverses.push(pars);
+        let r = o.add_array(&spec(4, Addressing::UniversePerFixture, ArrayDirection::Rows, false));
+        assert_eq!(o.universes_of(r.clone()), Some((10, 14)));
+        let labels: Vec<String> = o.fixtures[r].iter().map(|f| o.range_label(f)).collect();
+        assert_eq!(labels, ["U10 1-450", "U11 1-450", "U13 1-450", "U14 1-450"]);
+        // A different node may reuse the number: no skipping, no conflict.
+        let mut o2 = strips(150);
+        o2.lumiverses[0].target = "2.0.0.50".into();
+        let mut other = Lumiverse::new("Other node", 12);
+        other.target = "2.0.0.51".into();
+        o2.lumiverses.push(other);
+        let r = o2.add_array(&spec(4, Addressing::UniversePerFixture, ArrayDirection::Rows, false));
+        assert_eq!(o2.universes_of(r), Some((10, 13)));
+        // Overlap on the same node is reported as a conflict.
+        let mut o3 = o2.clone();
+        o3.lumiverses[1].target = "2.0.0.50".into();
+        o3.fixtures.push(Fixture { lumiverse: 1, ..o3.fixtures[0].clone() });
+        assert!(!o3.conflicts().is_empty());
+    }
+
+    #[test]
+    fn universe_offset_moves_fixture() {
+        let mut o = strips(2);
+        o.add_array(&spec(1, Addressing::Continue, ArrayDirection::Rows, false));
+        o.fixtures[0].universe_offset = 3;
+        let d = o.render_dmx(&Frame::new(1, 1, Rgba::rgb(1.0, 0.0, 0.0)));
+        assert_eq!(d.keys().copied().collect::<Vec<_>>(), vec![(0, 13)]);
+        assert_eq!(o.next_free_slot(0), (3, 7));
+        assert_eq!(o.next_free_universe(0), 4);
+    }
+
+    #[test]
+    fn white_modes() {
+        let mk = |w: WhiteMode| {
+            let mut o = one(FixtureType::new("p", 1, 1, "RGBW"), fx(1));
+            o.fixtures[0].white = w;
+            o.render_dmx(&Frame::new(1, 1, Rgba::rgb(0.5, 0.5, 0.5)))[&(0, 3)][0..4].to_vec()
+        };
+        // grey (e.g. white at 50% opacity) dims the white emitter, not the RGB diodes
+        assert_eq!(mk(WhiteMode::WhiteOnly), vec![0, 0, 0, 128]);
+        assert_eq!(mk(WhiteMode::RgbPlusWhite), vec![128, 128, 128, 128]);
+        assert_eq!(mk(WhiteMode::RgbOnly), vec![128, 128, 128, 0]);
     }
 
     #[test]

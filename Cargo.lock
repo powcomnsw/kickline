@@ -1978,6 +1978,7 @@ dependencies = [
 name = "lumen-output"
 version = "0.5.0"
 dependencies = [
+ "if-addrs",
  "socket2",
 ]
 

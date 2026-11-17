@@ -13,6 +13,25 @@ pub struct State {
     drag: Option<Drag>,
     add_type: usize,
     show_pixels: bool,
+    array_open: bool,
+    array: Option<ArrayForm>,
+    /// Network ports, refreshed every few seconds.
+    ports: Vec<lumen_output::NetIface>,
+    ports_at: Option<std::time::Instant>,
+}
+
+struct ArrayForm {
+    count: usize,
+    columns: bool,
+    zigzag: bool,
+    own_universe: bool,
+    area: [f32; 4],
+}
+
+impl Default for ArrayForm {
+    fn default() -> Self {
+        ArrayForm { count: 8, columns: false, zigzag: true, own_universe: true, area: [0.05, 0.1, 0.95, 0.9] }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -35,7 +54,11 @@ fn handles(fx: &Fixture, aspect: f32, rect: Rect) -> (Pos2, Pos2) {
     (resize, rotate)
 }
 
-fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
+fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_output::RouteState], ui: &mut egui::Ui) {
+    if st.ports_at.is_none_or(|t| t.elapsed().as_secs() >= 3) {
+        st.ports = lumen_output::interfaces();
+        st.ports_at = Some(std::time::Instant::now());
+    }
     ui.heading("Lumiverses");
     let mut remove = None;
     for (i, l) in o.lumiverses.iter().enumerate() {
@@ -97,10 +120,42 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
                     egui::TextEdit::singleline(&mut l.target).desired_width(130.0),
                 );
                 ui.end_row();
+                ui.label("Network port");
+                let label = match &l.interface {
+                    None => "Automatic".to_string(),
+                    Some(n) => st.ports.iter().find(|p| &p.name == n).map(|p| p.label()).unwrap_or_else(|| format!("{n} (not connected)")),
+                };
+                egui::ComboBox::from_id_salt("lvport").width(170.0).selected_text(label).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut l.interface, None, "Automatic").on_hover_text("Let the computer choose");
+                    for p in &st.ports {
+                        ui.selectable_value(&mut l.interface, Some(p.name.clone()), p.label());
+                    }
+                });
+                ui.end_row();
                 ui.label("Enabled");
                 ui.checkbox(&mut l.enabled, "");
                 ui.end_row();
             });
+        let t = crate::theme::current();
+        match routes.get(st.lumiverse) {
+            Some(lumen_output::RouteState::Up(i)) => {
+                ui.colored_label(t.ok, format!("Sending through {} ({})", i.name, i.ip));
+            }
+            Some(lumen_output::RouteState::Waiting(n)) => {
+                ui.colored_label(t.warn, format!("{n} isn't connected. Lumen keeps trying and resumes by itself."));
+            }
+            _ => {}
+        }
+        if let (Some(n), Ok(ip)) = (&l.interface, l.target.trim().parse::<std::net::Ipv4Addr>()) {
+            if let Some(p) = st.ports.iter().find(|p| &p.name == n) {
+                if ip != std::net::Ipv4Addr::BROADCAST && !p.contains(ip) && l.protocol == Protocol::ArtNet {
+                    ui.colored_label(t.warn, format!("{ip} isn't on {}'s network ({}/{}).", p.name, p.ip, p.prefix()));
+                }
+                if ip == std::net::Ipv4Addr::BROADCAST {
+                    ui.weak(format!("Broadcast goes to {} on this port.", p.broadcast));
+                }
+            }
+        }
         if l.protocol == Protocol::Sacn {
             ui.weak(format!(
                 "Multicast to 239.255.{}.{}",
@@ -164,7 +219,7 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
                 name: format!("{} {}", t.name, o.fixtures.len() + 1),
                 type_id: st.add_type,
                 lumiverse: st.lumiverse,
-                address: o.next_free_address(st.lumiverse),
+                address: o.next_free_slot(st.lumiverse).1,
                 x: 0.5,
                 y: 0.5,
                 w: if strip { 0.6 } else { 0.15 },
@@ -172,6 +227,8 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
                 rotation: 0.0,
                 snake: t.rows > 1,
                 reverse: false,
+                universe_offset: o.next_free_slot(st.lumiverse).0,
+                white: Default::default(),
             };
             o.fixtures.push(fx);
             st.selected = Some(o.fixtures.len() - 1);
@@ -186,7 +243,7 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
             let mut f = o.fixtures[st.selected.unwrap()].clone();
             f.name.push_str(" copy");
             f.y = (f.y + 0.05).min(1.0);
-            f.address = o.next_free_address(f.lumiverse);
+            (f.universe_offset, f.address) = o.next_free_slot(f.lumiverse);
             o.fixtures.push(f);
             st.selected = Some(o.fixtures.len() - 1);
         }
@@ -194,10 +251,105 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
             o.fixtures.remove(st.selected.unwrap());
             st.selected = None;
         }
+        ui.toggle_value(&mut st.array_open, "Add array…").on_hover_text("Lay out many strips at once");
+    });
+    if st.array_open {
+        array_form(o, st, ui);
+    }
+}
+
+/// Lay out N strips/bars at once, wired and addressed for you.
+fn array_form(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
+    let t = crate::theme::current();
+    if o.types.is_empty() || o.lumiverses.is_empty() {
+        ui.weak("Add a fixture type and a lumiverse first.");
+        return;
+    }
+    let f = st.array.get_or_insert_with(Default::default);
+    egui::Frame::new().fill(t.raised).corner_radius(t.radius).inner_margin(8).show(ui, |ui| {
+        ui.strong("Array");
+        egui::Grid::new("arr").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+            ui.label("Type");
+            ui.label(&o.types[st.add_type.min(o.types.len() - 1)].name);
+            ui.end_row();
+            ui.label("How many");
+            ui.add(egui::DragValue::new(&mut f.count).range(1..=256));
+            ui.end_row();
+            ui.label("Layout");
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut f.columns, false, "Rows");
+                ui.selectable_value(&mut f.columns, true, "Columns");
+            });
+            ui.end_row();
+            ui.label("Area");
+            ui.horizontal(|ui| {
+                for (i, l) in ["x", "y", "to x", "to y"].iter().enumerate() {
+                    ui.add(egui::DragValue::new(&mut f.area[i]).range(0.0..=1.0).speed(0.005).max_decimals(2).prefix(format!("{l} ")));
+                }
+            });
+            ui.end_row();
+            ui.label("Wiring");
+            ui.checkbox(&mut f.zigzag, "Zig-zag (every other one reversed)");
+            ui.end_row();
+            ui.label("Addressing");
+            ui.vertical(|ui| {
+                ui.radio_value(&mut f.own_universe, true, "Each on its own universe");
+                ui.radio_value(&mut f.own_universe, false, "Continue on from the last one");
+            });
+            ui.end_row();
+        });
+        let spec = lumen_fixtures::ArraySpec {
+            name: o.types[st.add_type.min(o.types.len() - 1)].name.clone(),
+            type_id: st.add_type.min(o.types.len() - 1),
+            lumiverse: st.lumiverse.min(o.lumiverses.len() - 1),
+            count: f.count,
+            direction: if f.columns { lumen_fixtures::ArrayDirection::Columns } else { lumen_fixtures::ArrayDirection::Rows },
+            area: (f.area[0].min(f.area[2]), f.area[1].min(f.area[3]), f.area[0].max(f.area[2]), f.area[1].max(f.area[3])),
+            zigzag: f.zigzag,
+            addressing: if f.own_universe {
+                lumen_fixtures::Addressing::UniversePerFixture
+            } else {
+                lumen_fixtures::Addressing::Continue
+            },
+            thickness: 0.035,
+        };
+        // Preview by trying it on a copy.
+        let mut trial = o.clone();
+        let r = trial.add_array(&spec);
+        let pixels: usize = trial.fixtures[r.clone()].iter().filter_map(|x| trial.types.get(x.type_id)).map(|t| t.pixel_count()).sum();
+        let unis = trial.universes_of(r.clone()).map(|(a, b)| if a == b { format!("universe {a}") } else { format!("universes {a}–{b}") }).unwrap_or_default();
+        ui.label(format!("{} fixtures, {} pixels, {} on {}", f.count, pixels, unis, o.lumiverses[spec.lumiverse].name));
+        // Tell the user about universes we stepped over.
+        let taken = o.universes_taken_by_others(spec.lumiverse);
+        if let Some((a, b)) = trial.universes_of(r.clone()) {
+            let mut skipped: Vec<u16> = (a..=b).filter(|u| taken.contains(u)).collect();
+            skipped.dedup();
+            if !skipped.is_empty() {
+                let list = skipped.iter().map(|u| format!("U{u}")).collect::<Vec<_>>().join(", ");
+                ui.label(egui::RichText::new(format!("Skips {list}: another lumiverse already sends there.")).color(crate::theme::current().weak));
+            }
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Create").clicked() {
+                let r = o.add_array(&spec);
+                st.selected = Some(r.start);
+                st.array_open = false;
+            }
+            if ui.button("Cancel").clicked() {
+                st.array_open = false;
+            }
+        });
     });
 }
 
-fn fixture_props(o: &mut AdvancedOutput, idx: usize, ui: &mut egui::Ui) {
+/// Returns true when "Edit type" was clicked.
+fn fixture_props(o: &mut AdvancedOutput, idx: usize, ui: &mut egui::Ui) -> bool {
+    let mut edit = false;
+    let base = o.lumiverses.get(o.fixtures[idx].lumiverse).map(|l| l.universe).unwrap_or(0);
+    let has_white = o.types.get(o.fixtures[idx].type_id).is_some_and(|t| {
+        t.pixel.contains(&lumen_fixtures::ChannelFn::White)
+            || t.slots.as_ref().is_some_and(|s| s.iter().any(|x| x.func == lumen_fixtures::ChannelFn::White))
+    });
     let range = o.range_label(&o.fixtures[idx]);
     let types: Vec<String> = o.types.iter().map(|t| t.name.clone()).collect();
     let lvs: Vec<String> = o
@@ -225,6 +377,14 @@ fn fixture_props(o: &mut AdvancedOutput, idx: usize, ui: &mut egui::Ui) {
                     ui.selectable_value(&mut fx.lumiverse, i, l);
                 }
             });
+        if ui.small_button("Edit type").on_hover_text("Open this fixture's type in the Fixture Editor").clicked() {
+            edit = true;
+        }
+        ui.label("Universe");
+        let mut abs = base + fx.universe_offset;
+        if ui.add(egui::DragValue::new(&mut abs).range(base..=32767)).changed() {
+            fx.universe_offset = abs.saturating_sub(base);
+        }
         ui.label("Address");
         ui.add(egui::DragValue::new(&mut fx.address).range(1..=512));
         ui.weak(range);
@@ -268,18 +428,29 @@ fn fixture_props(o: &mut AdvancedOutput, idx: usize, ui: &mut egui::Ui) {
         );
         ui.checkbox(&mut fx.snake, "Snake");
         ui.checkbox(&mut fx.reverse, "Reverse");
+        if has_white {
+            ui.label("White");
+            egui::ComboBox::from_id_salt("fxwhite").selected_text(fx.white.name()).show_ui(ui, |ui| {
+                for m in lumen_fixtures::WhiteMode::ALL {
+                    ui.selectable_value(&mut fx.white, m, m.name());
+                }
+            });
+        }
     });
+    edit
 }
 
 pub fn ui(app: &mut View, ui: &mut egui::Ui) {
     let View { e, s } = app;
-    let (output, frame, st) = (&mut e.output, &e.frame, &mut s.ao);
+    let (output, frame, st, routes) = (&mut e.output, &e.frame, &mut s.ao, &e.routes);
+    let (windows, fe) = (&mut s.windows, &mut s.fe);
+    let mut edit_type = None;
     let aspect = output.aspect;
     egui::Panel::left("ao_left")
         .default_size(290.0)
         .resizable(true)
         .show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| lumiverse_panel(output, st, ui));
+            egui::ScrollArea::vertical().show(ui, |ui| lumiverse_panel(output, st, routes, ui));
         });
 
     egui::CentralPanel::default().show(ui, |ui| {
@@ -433,10 +604,19 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
 
         ui.add_space(4.0);
         match st.selected.filter(|&i| i < output.fixtures.len()) {
-            Some(i) => fixture_props(output, i, ui),
+            Some(i) => {
+                if fixture_props(output, i, ui) {
+                    edit_type = Some(output.fixtures[i].type_id);
+                }
+            }
             None => {
                 ui.weak("Click a fixture to edit it, or add one from the list on the left.");
             }
         }
     });
+    if let Some(t) = edit_type {
+        windows.fixture_editor = true;
+        fe.selected = t;
+        fe.browsing = false;
+    }
 }

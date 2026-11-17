@@ -868,6 +868,15 @@ fn network_checks(
             continue;
         }
         let name = format!("\"{}\" (U{} {})", l.name, l.universe, l.protocol.name());
+        if let Some(port) = &l.interface {
+            match lumen_output::interfaces().into_iter().find(|p| &p.name == port) {
+                Some(p) => v.push(check("Network", format!("{name} port"), Status::Pass, format!("{} is connected", p.label()))),
+                None => v.push(
+                    check("Network", format!("{name} port"), Status::Fail, format!("network port {port} isn't connected"))
+                        .hint("Plug the cable or adapter back in, or choose another port in Advanced Output. Lumen resumes by itself when it's back."),
+                ),
+            }
+        }
         match l.protocol {
             Protocol::ArtNet => {
                 let Ok(t) = l.target.trim().parse::<Ipv4Addr>() else {
