@@ -1,5 +1,7 @@
 use crate::util::band_combo;
-use crate::View;
+use crate::{theme, View};
+use eframe::egui::{Align2, Color32, CornerRadius, FontId, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
+use lumen_core::{AudioBands, Frame};
 use eframe::egui;
 use lumen_core::{AudioBand, AudioLink, BlendMode, Clip, Effect, Generator, Layer};
 
@@ -129,106 +131,171 @@ fn effect_row(ui: &mut egui::Ui, id: (usize, usize), e: &mut Effect) {
 }
 
 fn layer_controls(ui: &mut egui::Ui, li: usize, layer: &mut Layer) {
+    let t = theme::current();
     ui.horizontal_wrapped(|ui| {
-        ui.add_space(8.0);
-        ui.checkbox(&mut layer.bypass, "Bypass");
-        ui.add(egui::Slider::new(&mut layer.opacity, 0.0..=1.0).text("Opacity"));
-        egui::ComboBox::from_id_salt(("blend", li))
-            .width(80.0)
-            .selected_text(layer.blend.name())
-            .show_ui(ui, |ui| {
-                for m in BlendMode::ALL {
-                    ui.selectable_value(&mut layer.blend, m, m.name());
-                }
-            });
-    });
-    ui.horizontal_wrapped(|ui| {
-        ui.add_space(8.0);
-        ui.label("🔊 Opacity follows");
+        ui.spacing_mut().slider_width = 110.0;
+        ui.label(RichText::new("Opacity").color(t.weak));
+        ui.add(egui::Slider::new(&mut layer.opacity, 0.0..=1.0).show_value(false));
+        egui::ComboBox::from_id_salt(("blend", li)).width(84.0).selected_text(layer.blend.name()).show_ui(ui, |ui| {
+            for m in BlendMode::ALL {
+                ui.selectable_value(&mut layer.blend, m, m.name());
+            }
+        });
+        ui.add_space(10.0);
+        ui.label(RichText::new("Reacts to").color(t.weak));
+        let mut link = layer.audio_opacity.unwrap_or(AudioLink { band: AudioBand::Bass, amount: 1.0 });
+        let label = layer.audio_opacity.map(|l| l.band.name()).unwrap_or("Nothing");
         let mut on = layer.audio_opacity.is_some();
-        let mut link = layer.audio_opacity.unwrap_or(AudioLink {
-            band: AudioBand::Bass,
-            amount: 1.0,
-        });
-        ui.checkbox(&mut on, "");
-        ui.add_enabled_ui(on, |ui| {
-            band_combo(ui, ("oplink", li), &mut link.band, false);
-            ui.add(egui::Slider::new(&mut link.amount, 0.0..=1.0).text("amount"));
-        });
-        layer.audio_opacity = on.then_some(link);
-        ui.separator();
-        ui.label("Next clip on");
-        let label = layer.advance_on.map(|b| b.name()).unwrap_or("Off");
-        egui::ComboBox::from_id_salt(("adv", li))
-            .width(70.0)
-            .selected_text(label)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut layer.advance_on, None, "Off");
-                for b in AudioBand::HITS {
-                    ui.selectable_value(&mut layer.advance_on, Some(b), b.name());
+        egui::ComboBox::from_id_salt(("oplink", li)).width(90.0).selected_text(label).show_ui(ui, |ui| {
+            if ui.selectable_label(!on, "Nothing").clicked() {
+                on = false;
+            }
+            for b in AudioBand::ALL {
+                if ui.selectable_label(on && link.band == b, b.name()).clicked() {
+                    on = true;
+                    link.band = b;
                 }
-            });
+            }
+        });
+        if on {
+            ui.add(egui::Slider::new(&mut link.amount, 0.0..=1.0).show_value(false)).on_hover_text("How much the band drives opacity");
+        }
+        layer.audio_opacity = on.then_some(link);
+        ui.add_space(10.0);
+        ui.label(RichText::new("Next clip on").color(t.weak));
+        let label = layer.advance_on.map(|b| b.name()).unwrap_or("Off");
+        egui::ComboBox::from_id_salt(("adv", li)).width(70.0).selected_text(label).show_ui(ui, |ui| {
+            ui.selectable_value(&mut layer.advance_on, None, "Off");
+            for b in AudioBand::HITS {
+                ui.selectable_value(&mut layer.advance_on, Some(b), b.name());
+            }
+        });
     });
 }
 
+const CELL: Vec2 = Vec2::new(104.0, 60.0);
+const NAME_W: f32 = 140.0;
+
+/// One clip slot: a live mini-preview of the clip with its name on top.
+fn clip_cell(ui: &mut egui::Ui, clip: Option<&Clip>, active: bool, color: Color32, beat: f64, audio: &AudioBands) -> egui::Response {
+    let t = theme::current();
+    let (rect, resp) = ui.allocate_exact_size(CELL, Sense::click());
+    let p = ui.painter_at(rect);
+    let radius = CornerRadius::same(t.radius);
+    match clip {
+        None => {
+            let fill = if resp.hovered() { t.raised } else { t.panel };
+            p.rect_filled(rect, radius, fill);
+            p.rect_stroke(rect.shrink(0.5), radius, Stroke::new(1.0, t.line), StrokeKind::Inside);
+            p.text(rect.center(), Align2::CENTER_CENTER, "empty", FontId::proportional(t.text_size - 3.0), theme::dim(t.weak, 0.7));
+        }
+        Some(c) => {
+            // Render the clip itself, small, as its thumbnail.
+            let mut f = Frame::transparent(32, 18);
+            c.generator.render(&mut f, beat, audio);
+            let inner = rect;
+            p.rect_filled(inner, radius, Color32::BLACK);
+            let (cw, ch) = (inner.width() / f.width as f32, inner.height() / f.height as f32);
+            let clip_rect = inner.shrink(1.0);
+            let painter = p.with_clip_rect(clip_rect);
+            for y in 0..f.height {
+                for x in 0..f.width {
+                    let px = f.get(x, y);
+                    if px.a <= 0.0 {
+                        continue;
+                    }
+                    let k = px.a.clamp(0.0, 1.0);
+                    let col = Color32::from_rgb(
+                        (px.r.clamp(0.0, 1.0) * k * 255.0) as u8,
+                        (px.g.clamp(0.0, 1.0) * k * 255.0) as u8,
+                        (px.b.clamp(0.0, 1.0) * k * 255.0) as u8,
+                    );
+                    let r = Rect::from_min_size(inner.min + Vec2::new(x as f32 * cw, y as f32 * ch), Vec2::new(cw + 0.5, ch + 0.5));
+                    painter.rect_filled(r, 0.0, col);
+                }
+            }
+            // Name on a dark band at the bottom so it's readable over any colour.
+            let band = Rect::from_min_max(egui::pos2(inner.min.x, inner.max.y - 22.0), inner.max);
+            p.rect_filled(band, CornerRadius { nw: 0, ne: 0, sw: t.radius, se: t.radius }, Color32::from_black_alpha(190));
+            p.text(
+                band.left_center() + Vec2::new(8.0, 0.0),
+                Align2::LEFT_CENTER,
+                &c.name,
+                FontId::proportional(t.text_size - 2.0),
+                if active { Color32::WHITE } else { t.text },
+            );
+            if active {
+                p.rect_stroke(rect, radius, Stroke::new(3.0, color), StrokeKind::Inside);
+            } else if resp.hovered() {
+                p.rect_stroke(rect, radius, Stroke::new(1.5, t.weak), StrokeKind::Inside);
+            }
+        }
+    }
+    resp
+}
+
 pub fn ui(app: &mut View, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
-        ui.heading("Clips");
-        ui.weak("right-click a clip to change it");
-    });
+    let t = theme::current();
     let mut trigger: Option<(usize, usize)> = None;
     let mut column: Option<usize> = None;
     let mut stop: Option<usize> = None;
     let mut remove_layer: Option<usize> = None;
     let cols = app.e.comp.columns;
+    let beat = app.e.comp.beat;
+    let audio = app.e.comp.audio;
     egui::ScrollArea::both().show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.add_space(118.0);
+            ui.add_space(NAME_W + 8.0);
             for c in 0..cols {
-                if ui
-                    .add_sized([96.0, 22.0], egui::Button::new(format!("▶ Col {}", c + 1)))
-                    .clicked()
-                {
+                let b = egui::Button::new(RichText::new(format!("▶  {}", c + 1)).color(t.weak)).min_size(Vec2::new(CELL.x, 24.0));
+                if ui.add(b).on_hover_text("Play this column on every layer").clicked() {
                     column = Some(c);
                 }
             }
         });
+        ui.add_space(4.0);
         for li in 0..app.e.comp.layers.len() {
+            let color = t.layers[li % t.layers.len()];
             let layer = &mut app.e.comp.layers[li];
-            ui.horizontal(|ui| {
-                ui.add_sized(
-                    [110.0, 30.0],
-                    egui::TextEdit::singleline(&mut layer.name).frame(egui::Frame::NONE),
-                );
-                for ci in 0..layer.clips.len() {
-                    let active = layer.active == Some(ci);
-                    let text = layer.clips[ci]
-                        .as_ref()
-                        .map(|c| c.name.clone())
-                        .unwrap_or_else(|| "—".into());
-                    let resp = ui.add_sized([96.0, 30.0], egui::Button::new(text).selected(active));
-                    if resp.clicked() {
-                        trigger = Some((li, ci));
+            let local = (beat - layer.trigger_beat).max(0.0);
+            egui::Frame::new().fill(t.panel).corner_radius(CornerRadius::same(t.radius + 2)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // Layer header: colour, name, bypass / stop / remove.
+                    ui.vertical(|ui| {
+                        ui.set_width(NAME_W);
+                        ui.horizontal(|ui| {
+                            let (r, _) = ui.allocate_exact_size(Vec2::new(5.0, 22.0), Sense::hover());
+                            ui.painter().rect_filled(r, 2.0, if layer.bypass { t.line } else { color });
+                            ui.add(egui::TextEdit::singleline(&mut layer.name).font(theme::bold(t.text_size)).frame(egui::Frame::NONE).desired_width(NAME_W - 20.0));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.toggle_value(&mut layer.bypass, "Bypass").on_hover_text("Hide this layer");
+                            if ui.button("■").on_hover_text("Stop layer").clicked() {
+                                stop = Some(li);
+                            }
+                            if ui.button("×").on_hover_text("Remove layer").clicked() {
+                                remove_layer = Some(li);
+                            }
+                        });
+                    });
+                    for ci in 0..layer.clips.len() {
+                        let active = layer.active == Some(ci);
+                        let b = if active { local } else { beat };
+                        let resp = clip_cell(ui, layer.clips[ci].as_ref(), active, color, b, &audio);
+                        if resp.clicked() {
+                            trigger = Some((li, ci));
+                        }
+                        resp.context_menu(|ui| clip_menu(ui, (li, ci), &mut layer.clips[ci]));
                     }
-                    resp.context_menu(|ui| clip_menu(ui, (li, ci), &mut layer.clips[ci]));
-                }
-                if ui.button("■").on_hover_text("Stop layer").clicked() {
-                    stop = Some(li);
-                }
-                if ui.small_button("✕").on_hover_text("Remove layer").clicked() {
-                    remove_layer = Some(li);
-                }
-            });
-            layer_controls(ui, li, layer);
-            ui.collapsing(
-                egui::RichText::new(format!("{} effects ({})", layer.name, layer.effects.len()))
-                    .small(),
-                |ui| {
+                });
+                ui.add_space(2.0);
+                layer_controls(ui, li, layer);
+                ui.collapsing(RichText::new(format!("Effects ({})", layer.effects.len())).color(t.weak), |ui| {
                     let mut remove = None;
                     for (ei, e) in layer.effects.iter_mut().enumerate() {
                         ui.horizontal(|ui| {
                             effect_row(ui, (li, ei), e);
-                            if ui.small_button("✕").clicked() {
+                            if ui.small_button("×").clicked() {
                                 remove = Some(ei);
                             }
                         });
@@ -237,45 +304,37 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                         layer.effects.remove(i);
                     }
                     ui.horizontal_wrapped(|ui| {
-                        if ui.small_button("+ Brightness").clicked() {
+                        ui.weak("Add:");
+                        if ui.small_button("Brightness").clicked() {
                             layer.effects.push(Effect::Brightness(1.0));
                         }
-                        if ui.small_button("+ Hue").clicked() {
+                        if ui.small_button("Hue").clicked() {
                             layer.effects.push(Effect::HueShift(0.0));
                         }
-                        if ui.small_button("+ Invert").clicked() {
+                        if ui.small_button("Invert").clicked() {
                             layer.effects.push(Effect::Invert);
                         }
-                        if ui.small_button("+ Pulse").clicked() {
-                            layer.effects.push(Effect::Pulse {
-                                depth: 0.8,
-                                per_beat: 1.0,
-                            });
+                        if ui.small_button("Pulse").clicked() {
+                            layer.effects.push(Effect::Pulse { depth: 0.8, per_beat: 1.0 });
                         }
-                        if ui.small_button("+ Audio brightness").clicked() {
-                            layer.effects.push(Effect::AudioBrightness {
-                                band: AudioBand::Bass,
-                                amount: 1.0,
-                            });
+                        if ui.small_button("Audio brightness").clicked() {
+                            layer.effects.push(Effect::AudioBrightness { band: AudioBand::Bass, amount: 1.0 });
                         }
-                        if ui.small_button("+ Audio hue").clicked() {
-                            layer.effects.push(Effect::AudioHue {
-                                band: AudioBand::HighMid,
-                                amount: 0.5,
-                            });
+                        if ui.small_button("Audio hue").clicked() {
+                            layer.effects.push(Effect::AudioHue { band: AudioBand::HighMid, amount: 0.5 });
                         }
                     });
-                },
-            );
-            ui.separator();
+                });
+            });
+            ui.add_space(6.0);
         }
-        if ui.button("+ Layer").clicked() {
-            let n = app.e.comp.layers.len() + 1;
-            app.e
-                .comp
-                .layers
-                .insert(0, Layer::new(format!("Layer {n}"), cols));
-        }
+        ui.horizontal(|ui| {
+            if ui.button("+ Layer").clicked() {
+                let n = app.e.comp.layers.len() + 1;
+                app.e.comp.layers.insert(0, Layer::new(format!("Layer {n}"), cols));
+            }
+            ui.weak("Click a clip to play it · right-click to change it");
+        });
     });
     if let Some((l, c)) = trigger {
         app.e.comp.trigger(l, c);

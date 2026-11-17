@@ -25,10 +25,10 @@ pub enum Status {
 impl Status {
     fn icon(self) -> (&'static str, Color32) {
         match self {
-            Status::Pass => ("✔", Color32::from_rgb(90, 210, 120)),
-            Status::Info => ("ℹ", Color32::from_rgb(120, 170, 230)),
-            Status::Warn => ("⚠", Color32::from_rgb(240, 190, 60)),
-            Status::Fail => ("✖", Color32::from_rgb(240, 90, 80)),
+            Status::Pass => ("✔", crate::theme::current().ok),
+            Status::Info => ("ℹ", crate::theme::current().weak),
+            Status::Warn => ("⚠", crate::theme::current().warn),
+            Status::Fail => ("✖", crate::theme::current().err),
         }
     }
 }
@@ -1179,7 +1179,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
     }
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(!app.diag.running(), egui::Button::new("▶ Run probe"))
+            .add_enabled(!app.diag.running(), egui::Button::new("Run probe"))
             .clicked()
         {
             run_probe(app);
@@ -1190,7 +1190,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
         }
         ui.separator();
         if ui
-            .add_enabled(!app.diag.running(), egui::Button::new("💾 Export report"))
+            .add_enabled(!app.diag.running(), egui::Button::new("Export report"))
             .clicked()
         {
             match export(app) {
@@ -1198,7 +1198,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                 Err(e) => log::error("diagnostics", format!("export failed: {e}")),
             }
         }
-        if ui.button("📋 Copy summary").clicked() {
+        if ui.button("Copy summary").clicked() {
             ui.ctx().copy_text(summary_text(app));
             app.diag.copied = true;
         }
@@ -1210,7 +1210,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(format!("Saved {}", p.display()))
-                    .color(Color32::from_rgb(90, 210, 120)),
+                    .color(crate::theme::current().ok),
             );
             if ui.small_button("Show in Finder").clicked() {
                 paths::reveal(&p);

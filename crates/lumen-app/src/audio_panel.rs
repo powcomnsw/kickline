@@ -105,7 +105,7 @@ fn timing(app: &mut View, ui: &mut egui::Ui) {
     if let Some(st) = &app.e.link_status {
         if st.peers > 0 {
             ui.colored_label(
-                Color32::from_rgb(90, 210, 120),
+                crate::theme::current().ok,
                 format!(
                     "Synced: {} peer(s), {:.2} BPM, beat {:.2}",
                     st.peers, st.tempo, st.beat
@@ -113,7 +113,7 @@ fn timing(app: &mut View, ui: &mut egui::Ui) {
             );
         } else {
             ui.colored_label(
-                Color32::from_rgb(240, 190, 60),
+                crate::theme::current().warn,
                 "Waiting for rekordbox. Turn on LINK in rekordbox, same Wi-Fi/LAN.",
             );
         }
@@ -210,7 +210,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                     }
                 }
             });
-            if ui.button("⟳ Refresh").clicked() {
+            if ui.button("Refresh").clicked() {
                 refresh_sources(app);
             }
         });
@@ -220,7 +220,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                 Some(pid) => {
                     let i = app.audio_apps.iter().position(|a| a.pid == pid).unwrap();
                     let already = matches!(&app.e.audio, AudioSource::Live(f) if f.kind == lumen_audio::FeedKind::App);
-                    if !already && ui.button("🎧 Use rekordbox (direct, no BlackHole)").clicked() {
+                    if !already && ui.button("Use rekordbox (direct)").clicked() {
                         pick = Some(Pick::App(i));
                     }
                 }

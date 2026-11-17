@@ -8,6 +8,7 @@ mod fixture_editor;
 mod link;
 mod log;
 mod paths;
+mod theme;
 mod util;
 
 use eframe::egui::{self, Color32, Sense, Stroke, Vec2};
@@ -178,62 +179,90 @@ impl View<'_> {
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("BPM");
+        let t = theme::current();
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            // Tempo
             let synced = self.e.link_status.as_ref().is_some_and(|s| s.peers > 0);
-            ui.add_enabled(!synced, egui::DragValue::new(&mut self.e.comp.bpm).range(20.0..=300.0).speed(0.25).max_decimals(1))
-                .on_disabled_hover_text("Tempo comes from Ableton Link");
-            ui.toggle_value(&mut self.e.sync.link_enabled, "🔗 Link").on_hover_text(if link::LinkSync::AVAILABLE {
-                "Follow tempo and beat from rekordbox via Ableton Link (Performance mode, LINK on)"
+            ui.add_enabled(
+                !synced,
+                egui::DragValue::new(&mut self.e.comp.bpm).range(20.0..=300.0).speed(0.25).max_decimals(1).suffix(" BPM"),
+            )
+            .on_disabled_hover_text("Tempo comes from Ableton Link");
+            ui.toggle_value(&mut self.e.sync.link_enabled, "Link").on_hover_text(if link::LinkSync::AVAILABLE {
+                "Follow tempo and beat from rekordbox via Ableton Link"
             } else {
                 "This build was made without Ableton Link"
             });
             util::beat_dots(ui, self.e.comp.beat);
-            ui.separator();
-            ui.label("Master");
-            ui.add(egui::Slider::new(&mut self.e.comp.master, 0.0..=1.0));
-            ui.separator();
-            ui.checkbox(&mut self.e.output_enabled, "DMX out");
-            ui.separator();
-            ui.toggle_value(&mut self.s.windows.advanced_output, "Advanced Output");
-            ui.toggle_value(&mut self.s.windows.fixture_editor, "Fixture Editor");
-            ui.toggle_value(&mut self.s.windows.dmx_monitor, "DMX Monitor");
-            ui.toggle_value(&mut self.s.windows.audio, "Audio");
-            let (_, errs) = log::counts();
-            let label = if errs > 0 { format!("Diagnostics ⚠{errs}") } else { "Diagnostics".into() };
-            ui.toggle_value(&mut self.s.windows.diagnostics, label);
-            ui.separator();
-            if ui.button("Save").clicked() {
-                self.save();
+            ui.add_space(14.0);
+            ui.label(egui::RichText::new("Master").color(t.weak));
+            ui.spacing_mut().slider_width = 130.0;
+            ui.add(egui::Slider::new(&mut self.e.comp.master, 0.0..=1.0).show_value(false));
+            ui.add_space(14.0);
+            let on = self.e.output_enabled;
+            let label = egui::RichText::new(if on { "DMX OUT  ON" } else { "DMX OUT  OFF" }).font(theme::bold(t.text_size - 1.0));
+            let b = egui::Button::new(if on { label.color(t.on_accent) } else { label.color(t.weak) }).fill(if on { t.accent } else { t.raised });
+            if ui.add(b).on_hover_text("Send to your lights").clicked() {
+                self.e.output_enabled = !on;
             }
-            if ui.button("Load").clicked() {
-                self.load();
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Load").clicked() {
+                    self.load();
+                }
+                if ui.button("Save").clicked() {
+                    self.save();
+                }
+                ui.add_space(12.0);
+                let (_, errs) = log::counts();
+                let w = &mut self.s.windows;
+                let diag = if errs > 0 { format!("Diagnostics ({errs})") } else { "Diagnostics".into() };
+                ui.toggle_value(&mut w.diagnostics, diag);
+                ui.toggle_value(&mut w.audio, "Audio");
+                ui.toggle_value(&mut w.dmx_monitor, "DMX Monitor");
+                ui.toggle_value(&mut w.fixture_editor, "Fixtures");
+                ui.toggle_value(&mut w.advanced_output, "Advanced Output");
+            });
         });
+        ui.add_space(4.0);
+    }
+
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let t = theme::current();
         ui.horizontal(|ui| {
-            ui.label(&self.e.status);
+            let (dot, txt) = if self.e.output_enabled { (t.ok, self.e.status.clone()) } else { (t.weak, "DMX output off".into()) };
+            ui.colored_label(dot, "●");
+            ui.label(egui::RichText::new(txt).color(t.weak));
             ui.separator();
-            ui.label(format!("Audio: {}", self.e.audio.label()));
+            ui.label(egui::RichText::new(format!("Audio: {}", self.e.audio.label())).color(t.weak));
             util::hit_dots(ui, &self.e.bands);
             if let Some(st) = &self.e.link_status {
                 ui.separator();
                 if st.peers > 0 {
-                    ui.colored_label(
-                        Color32::from_rgb(90, 210, 120),
-                        format!("Link: {} peer(s), {:.1} BPM", st.peers, st.tempo),
-                    );
+                    ui.colored_label(t.ok, format!("Link: {} peer(s), {:.1} BPM", st.peers, st.tempo));
                 } else {
-                    ui.colored_label(
-                        Color32::from_rgb(240, 190, 60),
-                        "Link: waiting for rekordbox…",
-                    );
+                    ui.colored_label(t.warn, "Link: waiting for rekordbox");
                 }
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut i = theme::index();
+                egui::ComboBox::from_id_salt("theme").selected_text(theme::PRESETS[i].name).show_ui(ui, |ui| {
+                    for (k, th) in theme::PRESETS.iter().enumerate() {
+                        ui.selectable_value(&mut i, k, th.name).on_hover_text(th.note);
+                    }
+                });
+                if i != theme::index() {
+                    theme::set(ui.ctx(), i);
+                }
+                ui.label(egui::RichText::new("Theme").color(t.weak));
+            });
         });
     }
 
     fn preview(&mut self, ui: &mut egui::Ui) {
-        ui.label("Composition");
+        let t = theme::current();
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Composition").font(theme::bold(t.text_size)));
         let w = ui.available_width();
         let frame = &self.e.frame;
         let aspect = frame.width as f32 / frame.height as f32;
@@ -292,10 +321,8 @@ impl eframe::App for LumenApp {
         }
 
         egui::Panel::top("top").show(ui, |ui| v.top_bar(ui));
-        egui::Panel::right("preview")
-            .default_size(360.0)
-            .resizable(true)
-            .show(ui, |ui| v.preview(ui));
+        egui::Panel::bottom("status").show(ui, |ui| v.status_bar(ui));
+        egui::Panel::right("preview").default_size(380.0).resizable(true).show(ui, |ui| v.preview(ui));
         egui::CentralPanel::default().show(ui, |ui| clips::ui(&mut v, ui));
 
         let mut open = v.windows.advanced_output;
@@ -399,6 +426,12 @@ fn main() -> eframe::Result {
                 })
                 .unwrap_or_default();
             log::info("app", format!("graphics: {gpu}"));
+            theme::install_fonts(&cc.egui_ctx);
+            if let Some(i) = args.iter().find_map(|a| a.strip_prefix("--theme=")).and_then(|s| s.parse().ok()) {
+                theme::set(&cc.egui_ctx, i);
+            } else {
+                theme::apply(&cc.egui_ctx);
+            }
             let mut app = LumenApp::new(gpu);
             apply_args(&mut app, &args);
             Ok(Box::new(app))

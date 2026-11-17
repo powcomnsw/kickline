@@ -49,7 +49,7 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
             {
                 st.lumiverse = i;
             }
-            if o.lumiverses.len() > 1 && ui.small_button("✕").clicked() {
+            if o.lumiverses.len() > 1 && ui.small_button("×").clicked() {
                 remove = Some(i);
             }
         });
@@ -122,7 +122,7 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
                 let bad = conflicts.iter().any(|&(a, b)| a == i || b == i);
                 let mut text = egui::RichText::new(format!("{}   {}", fx.name, o.range_label(fx)));
                 if bad {
-                    text = text.color(Color32::from_rgb(255, 120, 80));
+                    text = text.color(crate::theme::current().err);
                 }
                 if ui.selectable_label(st.selected == Some(i), text).clicked() {
                     st.selected = Some(i);
@@ -132,7 +132,7 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
         });
     if !conflicts.is_empty() {
         ui.colored_label(
-            Color32::from_rgb(255, 120, 80),
+            crate::theme::current().err,
             format!("⚠ {} overlapping address range(s)", conflicts.len()),
         );
     }
@@ -374,9 +374,9 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                 .map(|&(u, v)| to_screen(rect, u, v))
                 .collect();
             let col = if bad {
-                Color32::from_rgb(255, 110, 70)
+                crate::theme::current().err
             } else if sel {
-                Color32::from_rgb(90, 200, 255)
+                crate::theme::current().accent
             } else {
                 Color32::from_white_alpha(170)
             };
@@ -407,7 +407,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                 painter.circle_filled(
                     to_screen(rect, u, v),
                     (r * 0.6).max(1.5),
-                    Color32::from_rgb(80, 255, 120),
+                    crate::theme::current().accent,
                 );
             }
             let label_pos = pts[0] + Vec2::new(2.0, -14.0);

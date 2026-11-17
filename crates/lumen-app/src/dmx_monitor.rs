@@ -91,7 +91,7 @@ pub fn ui(view: &mut View, ui: &mut egui::Ui) {
         if owner[ch].is_some() && (ch == 0 || owner[ch - 1] != owner[ch]) {
             painter.line_segment(
                 [rr.left_top(), rr.left_bottom()],
-                Stroke::new(2.0, Color32::from_rgb(80, 255, 120)),
+                Stroke::new(2.0, crate::theme::current().accent),
             );
         }
         if cell >= 20.0 && owner[ch].is_some() {

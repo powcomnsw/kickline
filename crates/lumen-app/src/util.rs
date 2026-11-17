@@ -74,17 +74,14 @@ pub fn band_combo(
 
 /// Four dots showing the position in the bar; the current beat is lit.
 pub fn beat_dots(ui: &mut egui::Ui, beat: f64) {
+    let t = crate::theme::current();
     let b = beat.max(0.0);
     let idx = (b.floor() as i64).rem_euclid(4) as usize;
     let fade = 1.0 - b.fract() as f32;
     for i in 0..4 {
-        let (r, p) = ui.allocate_painter(Vec2::new(10.0, 14.0), egui::Sense::hover());
-        let k = if i == idx { 0.35 + 0.65 * fade } else { 0.15 };
-        let c = if i == 0 {
-            Color32::from_rgb((255.0 * k) as u8, (120.0 * k) as u8, (220.0 * k) as u8)
-        } else {
-            Color32::from_gray((255.0 * k) as u8)
-        };
-        p.circle_filled(r.rect.center(), 3.5, c);
+        let (r, p) = ui.allocate_painter(Vec2::new(12.0, 16.0), egui::Sense::hover());
+        let lit = if i == 0 { t.accent } else { t.text };
+        let k = if i == idx { 0.35 + 0.65 * fade } else { 0.0 };
+        p.circle_filled(r.rect.center(), if i == 0 { 4.5 } else { 3.5 }, crate::theme::mix(t.raised, lit, k));
     }
 }

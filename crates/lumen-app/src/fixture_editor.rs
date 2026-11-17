@@ -76,7 +76,7 @@ fn channel_list(ui: &mut egui::Ui, id: &str, chans: &mut Vec<ChannelFn>) {
         ui.horizontal(|ui| {
             ui.label(format!("{:>2}", i + 1));
             func_combo(ui, (id, i), c);
-            if ui.small_button("✕").clicked() {
+            if ui.small_button("×").clicked() {
                 remove = Some(i);
             }
         });
@@ -238,13 +238,12 @@ fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
     let mut result = None;
     let total = st.library().entries.len();
     ui.horizontal(|ui| {
-        ui.label("🔍");
         ui.add(
             egui::TextEdit::singleline(&mut st.query)
                 .hint_text(format!("Search {total} fixtures: brand or model"))
                 .desired_width(300.0),
         );
-        if ui.button("⟳ Rescan your folders").clicked() {
+        if ui.button("Rescan folders").clicked() {
             st.library = None;
             st.entry = None;
             st.opened = None;
@@ -262,7 +261,7 @@ fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
                     let e = &lib.entries[i];
                     let mut text = RichText::new(format!("{} — {}", e.manufacturer, e.model));
                     if e.origin() == "your files" {
-                        text = text.color(Color32::from_rgb(120, 200, 255));
+                        text = text.color(crate::theme::current().accent);
                     }
                     if ui.selectable_label(st.entry == Some(i), text).clicked() {
                         pick = Some(i);
@@ -285,7 +284,7 @@ fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
                 ui.weak("Pick a fixture on the left.");
             }
             Some(Err(e)) => {
-                ui.colored_label(Color32::from_rgb(240, 90, 80), format!("Can't read this fixture: {e}"));
+                ui.colored_label(crate::theme::current().err, format!("Can't read this fixture: {e}"));
             }
             Some(Ok(f)) => {
                 ui.heading(f.title());
@@ -304,7 +303,7 @@ fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
                         ui.label(format!("{} pixel(s), {} of {} channels follow the image", t.pixel_count(), driven, t.footprint()));
                         if driven == 0 {
                             ui.colored_label(
-                                Color32::from_rgb(240, 190, 60),
+                                crate::theme::current().warn,
                                 "No colour or dimmer channels in this mode: Lumen can't light it yet (moving-head control is planned).",
                             );
                         }
@@ -319,7 +318,7 @@ fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
                                         _ => what,
                                     };
                                     if lit {
-                                        ui.colored_label(Color32::from_rgb(90, 210, 120), what);
+                                        ui.colored_label(crate::theme::current().ok, what);
                                     } else {
                                         ui.weak(what);
                                     }
@@ -337,7 +336,7 @@ fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
                         });
                     }
                     Err(e) => {
-                        ui.colored_label(Color32::from_rgb(240, 90, 80), e);
+                        ui.colored_label(crate::theme::current().err, e);
                     }
                 }
             }
@@ -376,7 +375,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.toggle_value(&mut st.browsing, "📚 Library");
+            ui.toggle_value(&mut st.browsing, "Library");
             if ui.button("+ New").clicked() {
                 o.types.push(FixtureType::new("New fixture", 10, 1, "RGB"));
                 st.selected = o.types.len() - 1;
@@ -403,8 +402,8 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
     egui::CentralPanel::default().show(ui, |ui| {
         if let Some(m) = st.message.clone() {
             ui.horizontal(|ui| {
-                ui.colored_label(Color32::from_rgb(90, 210, 120), &m);
-                if ui.small_button("✕").clicked() {
+                ui.colored_label(crate::theme::current().ok, &m);
+                if ui.small_button("×").clicked() {
                     st.message = None;
                 }
             });
@@ -444,7 +443,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
         match o.types.get_mut(st.selected) {
             Some(t) => type_editor(ui, t),
             None => {
-                ui.label("No fixture types yet. Open 📚 Library or click + New.");
+                ui.label("No fixture types yet. Open Library or click + New.");
             }
         }
     });
