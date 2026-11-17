@@ -442,7 +442,7 @@ mod tests {
     #[test]
     #[ignore]
     fn timer_accuracy() {
-        fn measure(label: &str, raise: bool) {
+        fn measure(label: &'static str, raise: bool) {
             std::thread::spawn(move || {
                 if raise {
                     raise_thread_priority();
