@@ -367,8 +367,27 @@ mod tests {
     use super::*;
     use lumen_audio::AudioFeed;
 
+    /// Overloaded CI VMs (GitHub's macOS runners) can sleep 100 ms when asked
+    /// for 20 ms. Rate assertions are meaningless there.
+    fn timers_are_sloppy() -> bool {
+        let t = Instant::now();
+        for _ in 0..5 {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let ms = t.elapsed().as_secs_f32() * 1000.0;
+        if ms > 80.0 {
+            eprintln!("skipping rate checks: 5 x 10 ms sleeps took {ms:.0} ms on this machine");
+            true
+        } else {
+            false
+        }
+    }
+
     #[test]
     fn engine_runs_at_rate_and_follows_demo_beat() {
+        if timers_are_sloppy() {
+            return;
+        }
         let mut e = Engine::new(Composition::demo(), AdvancedOutput::demo());
         e.sync.send_rate_hz = 50.0;
         e.start_demo_audio();
