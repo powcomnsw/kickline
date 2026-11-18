@@ -94,7 +94,7 @@ mod imp {
 
     const SYSTEM: AudioObjectID = kAudioObjectSystemObject as AudioObjectID;
 
-    /// Look the tap functions up at run time, so Lumen still launches on
+    /// Look the tap functions up at run time, so Kickline still launches on
     /// macOS versions older than 14.2 (it just can't offer direct capture).
     fn sym<T: Copy>(name: &CStr) -> Option<T> {
         // SAFETY: dlsym with RTLD_DEFAULT and a NUL-terminated name.
@@ -326,7 +326,7 @@ mod imp {
             // 1. The tap: an unmuted, private stereo mix of the app's output.
             let procs = NSArray::from_retained_slice(&[NSNumber::numberWithUnsignedInt(process)]);
             let desc = CATapDescription::initStereoMixdownOfProcesses(CATapDescription::alloc(), &procs);
-            desc.setName(&NSString::from_str("Lumen"));
+            desc.setName(&NSString::from_str("Kickline"));
             desc.setPrivate(true);
             desc.setMuteBehavior(CATapMuteBehavior::Unmuted);
             let tap_uid = desc.UUID().UUIDString().to_string();
@@ -348,7 +348,7 @@ mod imp {
                 (kAudioSubTapUIDKey, obj(NSString::from_str(&tap_uid))),
             ]);
             let description = dict(vec![
-                (kAudioAggregateDeviceNameKey, obj(NSString::from_str("Lumen rekordbox tap"))),
+                (kAudioAggregateDeviceNameKey, obj(NSString::from_str("Kickline rekordbox tap"))),
                 (kAudioAggregateDeviceUIDKey, obj(agg_uid)),
                 (kAudioAggregateDeviceMainSubDeviceKey, obj(NSString::from_str(&out_uid))),
                 (kAudioAggregateDeviceIsPrivateKey, obj(NSNumber::numberWithBool(true))),

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Lumen.app and Lumen-<version>.dmg on a Mac.
+# Build Kickline.app and Kickline-<version>.dmg on a Mac.
 #
 #   ./scripts/build-macos.sh            universal app (Apple Silicon + Intel)
 #   ./scripts/build-macos.sh --native   only this Mac's architecture (faster)
@@ -21,7 +21,7 @@ cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 PKG="$ROOT/packaging/macos"
 OUT="$ROOT/dist"
-APP="$OUT/Lumen.app"
+APP="$OUT/Kickline.app"
 
 [[ "$(uname)" == "Darwin" ]] || { echo "This script must run on macOS." >&2; exit 1; }
 command -v cargo >/dev/null || { echo "Rust not found. Install from https://rustup.rs" >&2; exit 1; }
@@ -53,21 +53,21 @@ else
   TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
 fi
 
-echo "==> Lumen $VERSION ($BUILD) for ${TARGETS[*]}"
+echo "==> Kickline $VERSION ($BUILD) for ${TARGETS[*]}"
 for t in "${TARGETS[@]}"; do
   rustup target add "$t" >/dev/null
   cargo build --release --locked -p lumen-app --target "$t" ${FEATURES[@]+"${FEATURES[@]}"}
 done
 
-echo "==> Assembling Lumen.app"
+echo "==> Assembling Kickline.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 BINS=()
 for t in "${TARGETS[@]}"; do BINS+=("target/$t/release/lumen-app"); done
 if (( ${#BINS[@]} > 1 )); then
-  lipo -create "${BINS[@]}" -output "$APP/Contents/MacOS/Lumen"
+  lipo -create "${BINS[@]}" -output "$APP/Contents/MacOS/Kickline"
 else
-  cp "${BINS[0]}" "$APP/Contents/MacOS/Lumen"
+  cp "${BINS[0]}" "$APP/Contents/MacOS/Kickline"
 fi
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" "$PKG/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
@@ -85,21 +85,21 @@ rm -rf "$ICONSET"
 echo "==> Signing"
 if [[ -n "${DEVELOPER_ID:-}" ]]; then
   codesign --force --options runtime --timestamp \
-    --entitlements "$PKG/Lumen.entitlements" --sign "$DEVELOPER_ID" "$APP"
+    --entitlements "$PKG/Kickline.entitlements" --sign "$DEVELOPER_ID" "$APP"
 else
-  codesign --force --sign - --entitlements "$PKG/Lumen.entitlements" "$APP"
+  codesign --force --sign - --entitlements "$PKG/Kickline.entitlements" "$APP"
   echo "    ad-hoc signed (set DEVELOPER_ID to sign for distribution)"
 fi
 codesign --verify --strict "$APP"
 
 echo "==> Disk image"
-DMG="$OUT/Lumen-$VERSION.dmg"
+DMG="$OUT/Kickline-$VERSION.dmg"
 STAGE="$OUT/dmg"
 rm -rf "$STAGE" "$DMG"; mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 cp "$ROOT/packaging/macos/INSTALL.txt" "$STAGE/Read me first.txt"
-hdiutil create -volname "Lumen $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+hdiutil create -volname "Kickline $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 if [[ -n "${DEVELOPER_ID:-}" ]]; then
   codesign --force --timestamp --sign "$DEVELOPER_ID" "$DMG"
@@ -112,7 +112,7 @@ if [[ -n "${NOTARY_PROFILE:-}" ]]; then
 fi
 
 echo "==> Checks"
-lipo -archs "$APP/Contents/MacOS/Lumen"
+lipo -archs "$APP/Contents/MacOS/Kickline"
 echo
 echo "Done:"
 echo "  $APP"

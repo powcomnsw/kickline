@@ -142,7 +142,7 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_outpu
                 ui.colored_label(t.ok, format!("Sending through {} ({})", i.name, i.ip));
             }
             Some(lumen_output::RouteState::Waiting(n)) => {
-                ui.colored_label(t.warn, format!("{n} isn't connected. Lumen keeps trying and resumes by itself."));
+                ui.colored_label(t.warn, format!("{n} isn't connected. Kickline keeps trying and resumes by itself."));
             }
             _ => {}
         }

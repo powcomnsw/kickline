@@ -10,21 +10,36 @@ fn home() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
+/// The app used to be called Lumen. Move a folder from its old name the first
+/// time the new one is needed, so projects, fixtures and settings carry over.
+fn migrate(new: &std::path::Path) {
+    if new.exists() {
+        return;
+    }
+    let Some(name) = new.file_name().and_then(|n| n.to_str()) else { return };
+    let old_name = if name == "kickline" { "lumen" } else { "Lumen" };
+    let old = new.with_file_name(old_name);
+    if old.is_dir() {
+        let _ = std::fs::rename(&old, new);
+    }
+}
+
 /// Settings, logs and crash reports.
 pub fn data_dir() -> PathBuf {
     let d = if cfg!(target_os = "macos") {
-        home().join("Library/Application Support/Lumen")
+        home().join("Library/Application Support/Kickline")
     } else if cfg!(target_os = "windows") {
         std::env::var_os("APPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(home)
-            .join("Lumen")
+            .join("Kickline")
     } else {
         std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home().join(".local/share"))
-            .join("lumen")
+            .join("kickline")
     };
+    migrate(&d);
     let _ = std::fs::create_dir_all(&d);
     d
 }
@@ -35,15 +50,23 @@ pub fn crash_dir() -> PathBuf {
     d
 }
 
-/// User-visible project folder: ~/Documents/Lumen.
+/// User-visible project folder: ~/Documents/Kickline.
 pub fn projects_dir() -> PathBuf {
-    let d = home().join("Documents").join("Lumen");
+    let d = home().join("Documents").join("Kickline");
+    migrate(&d);
     let _ = std::fs::create_dir_all(&d);
     d
 }
 
 pub fn project_file() -> PathBuf {
-    projects_dir().join("lumen_project.json")
+    {
+        let new = projects_dir().join("kickline_project.json");
+        let old = projects_dir().join("lumen_project.json");
+        if !new.exists() && old.exists() {
+            let _ = std::fs::rename(&old, &new);
+        }
+        new
+    }
 }
 
 /// Your own fixture files (.qxf), scanned by the fixture library.

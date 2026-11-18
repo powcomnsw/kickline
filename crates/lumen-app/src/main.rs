@@ -395,7 +395,7 @@ fn main() -> eframe::Result {
     log::info(
         "app",
         format!(
-            "Lumen {} starting on {}/{}",
+            "Kickline {} starting on {}/{}",
             env!("CARGO_PKG_VERSION"),
             std::env::consts::OS,
             std::env::consts::ARCH
@@ -415,11 +415,11 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
-            .with_title("Lumen"),
+            .with_title("Kickline"),
         ..Default::default()
     };
     eframe::run_native(
-        "Lumen",
+        "Kickline",
         options,
         Box::new(move |cc| {
             let gpu = cc

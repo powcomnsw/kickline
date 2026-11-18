@@ -1,9 +1,9 @@
-//! Fixture library: QLC+'s fixture definitions bundled with Lumen (Apache-2.0,
+//! Fixture library: QLC+'s fixture definitions bundled with Kickline (Apache-2.0,
 //! see `assets/QLCPLUS-LICENSE.txt`), plus any folders of `.qxf` files, such
-//! as ~/Documents/Lumen/Fixtures or an installed QLC+'s user fixtures.
+//! as ~/Documents/Kickline/Fixtures or an installed QLC+'s user fixtures.
 //!
 //! Download fixtures that aren't included from open-fixture-library.org
-//! ("Download as QLC+ fixture") and drop them on the Lumen window.
+//! ("Download as QLC+ fixture") and drop them on the Kickline window.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};

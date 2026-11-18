@@ -273,7 +273,7 @@ fn system_checks(app: &View) -> Vec<Check> {
     let mut v = vec![
         check(
             "System",
-            "Lumen",
+            "Kickline",
             Status::Info,
             format!("version {}", env!("CARGO_PKG_VERSION")),
         ),
@@ -321,7 +321,7 @@ fn system_checks(app: &View) -> Vec<Check> {
             Status::Fail,
             format!("can't write to {}", paths::projects_dir().display()),
         )
-        .hint("Check permissions on ~/Documents/Lumen.")
+        .hint("Check permissions on ~/Documents/Kickline.")
     });
     let crashes = log::previous_crashes();
     if crashes.is_empty() {
@@ -397,7 +397,7 @@ fn audio_checks(app: &View) -> Vec<Check> {
                 ),
             ));
             let silence_hint = if direct {
-                "macOS: System Settings > Privacy & Security > Screen & System Audio Recording, allow Lumen (System Audio Recording), then pick rekordbox again. Also check a track is playing."
+                "macOS: System Settings > Privacy & Security > Screen & System Audio Recording, allow Kickline (System Audio Recording), then pick rekordbox again. Also check a track is playing."
             } else {
                 "Is music playing? macOS: a denied microphone permission gives silence. With BlackHole, set rekordbox's output (Preferences > Audio) to BlackHole."
             };
@@ -414,7 +414,7 @@ fn audio_checks(app: &View) -> Vec<Check> {
                     check("Audio", "Stream", Status::Fail, "capture opened but no audio is arriving").hint(if direct {
                         "rekordbox may have restarted or switched output device: pick it again under Audio > Source."
                     } else {
-                        "macOS: System Settings > Privacy & Security > Microphone, allow Lumen, then restart it. Also try another device."
+                        "macOS: System Settings > Privacy & Security > Microphone, allow Kickline, then restart it. Also try another device."
                     }),
                 );
             } else {
@@ -746,7 +746,7 @@ fn perf_checks(app: &View) -> Vec<Check> {
         None => v.push(check("Sync", "Ableton Link", Status::Info, if crate::link::LinkSync::AVAILABLE { "off" } else { "not in this build" })),
         Some(st) if st.peers == 0 => v.push(
             check("Sync", "Ableton Link", Status::Warn, "on, but no other Link app found")
-                .hint("rekordbox: Performance mode, press LINK (global section). Both apps must be on the same network; allow Lumen under Local Network on macOS."),
+                .hint("rekordbox: Performance mode, press LINK (global section). Both apps must be on the same network; allow Kickline under Local Network on macOS."),
         ),
         Some(st) => v.push(check(
             "Sync",
@@ -873,7 +873,7 @@ fn network_checks(
                 Some(p) => v.push(check("Network", format!("{name} port"), Status::Pass, format!("{} is connected", p.label()))),
                 None => v.push(
                     check("Network", format!("{name} port"), Status::Fail, format!("network port {port} isn't connected"))
-                        .hint("Plug the cable or adapter back in, or choose another port in Advanced Output. Lumen resumes by itself when it's back."),
+                        .hint("Plug the cable or adapter back in, or choose another port in Advanced Output. Kickline resumes by itself when it's back."),
                 ),
             }
         }
@@ -999,7 +999,7 @@ fn network_checks(
                     {
                         v.push(
                             check("Network", format!("Universe {uni}"), Status::Warn, format!("used by \"{}\" but no node found listens to it", l.name))
-                                .hint("Check the universe numbering: some nodes count from 1, Lumen's Art-Net universes count from 0."),
+                                .hint("Check the universe numbering: some nodes count from 1, Kickline's Art-Net universes count from 0."),
                         );
                     }
                 }
@@ -1096,7 +1096,7 @@ struct Crash {
 pub fn summary_text(app: &View) -> String {
     let (p, w, f) = app.diag.summary_counts();
     let mut s = format!(
-        "Lumen {} on {}/{} — {p} pass, {w} warn, {f} fail\n",
+        "Kickline {} on {}/{} — {p} pass, {w} warn, {f} fail\n",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
         std::env::consts::ARCH

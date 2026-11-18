@@ -209,7 +209,7 @@ impl Sender {
             }
             Protocol::Sacn => {
                 let u = universe + 1;
-                let pkt = sacn_packet(&cid, "Lumen", u, 100, seq, data);
+                let pkt = sacn_packet(&cid, "Kickline", u, 100, seq, data);
                 let dest = Ipv4Addr::new(239, 255, (u >> 8) as u8, (u & 0xff) as u8);
                 r.socket.send_to(&pkt, SocketAddr::from((dest, SACN_PORT)))
             }
@@ -265,13 +265,13 @@ mod tests {
     #[test]
     fn sacn_lengths_and_fields() {
         let cid = [0xAB; 16];
-        let p = sacn_packet(&cid, "Lumen", 258, 100, 9, &[5u8; 512]);
+        let p = sacn_packet(&cid, "Kickline", 258, 100, 9, &[5u8; 512]);
         assert_eq!(p.len(), 638);
         assert_eq!(&p[16..18], &[0x72, 0x6e]);
         assert_eq!(&p[38..40], &[0x72, 0x58]);
         assert_eq!(&p[115..117], &[0x72, 0x0b]);
         assert_eq!(&p[4..16], b"ASC-E1.17\0\0\0");
-        assert_eq!(&p[44..49], b"Lumen");
+        assert_eq!(&p[44..52], b"Kickline");
         assert_eq!(p[108], 100);
         assert_eq!(p[111], 9);
         assert_eq!(&p[113..115], &[1, 2]);

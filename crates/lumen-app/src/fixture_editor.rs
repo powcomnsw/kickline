@@ -39,7 +39,7 @@ impl State {
         self.opened = Some(self.library().open(i));
     }
 
-    /// Import a file dropped on the window: copy it into ~/Documents/Lumen/Fixtures and show it.
+    /// Import a file dropped on the window: copy it into ~/Documents/Kickline/Fixtures and show it.
     pub fn import_dropped(&mut self, path: &std::path::Path) {
         let dest = paths::fixtures_dir().join(path.file_name().unwrap_or_default());
         let target = if path.starts_with(paths::fixtures_dir()) {
@@ -104,7 +104,7 @@ fn func_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, c: 
     }
 }
 
-/// What Lumen does with a channel, in words.
+/// What Kickline does with a channel, in words.
 fn describe(func: ChannelFn, fine: bool) -> (String, bool) {
     match func {
         ChannelFn::Fixed(v) => (format!("held at {v}"), false),
@@ -119,7 +119,7 @@ fn slot_table(ui: &mut egui::Ui, slots: &mut [Slot]) {
         ui.weak("ch");
         ui.weak("name");
         ui.weak("pixel");
-        ui.weak("Lumen drives it as");
+        ui.weak("Kickline drives it as");
         ui.end_row();
         for (i, s) in slots.iter_mut().enumerate() {
             ui.monospace(format!("{:>3}", i + 1));
@@ -304,7 +304,7 @@ fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
                         if driven == 0 {
                             ui.colored_label(
                                 crate::theme::current().warn,
-                                "No colour or dimmer channels in this mode: Lumen can't light it yet (moving-head control is planned).",
+                                "No colour or dimmer channels in this mode: Kickline can't light it yet (moving-head control is planned).",
                             );
                         }
                         egui::ScrollArea::vertical().id_salt("modech").max_height(330.0).show(ui, |ui| {
@@ -350,7 +350,7 @@ fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
         }
     });
     ui.weak(
-        "Missing one? Download it from open-fixture-library.org as a \"QLC+ fixture\" and drag the file onto Lumen. \
+        "Missing one? Download it from open-fixture-library.org as a \"QLC+ fixture\" and drag the file onto Kickline. \
          Built-in fixtures come from the QLC+ project (Apache-2.0).",
     );
     result

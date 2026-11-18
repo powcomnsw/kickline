@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pack QLC+'s fixture library into one compressed file that Lumen embeds.
+"""Pack QLC+'s fixture library into one compressed file that Kickline embeds.
 
     git clone --depth 1 --filter=blob:none --sparse https://github.com/mcallegari/qlcplus
     git -C qlcplus sparse-checkout set resources/fixtures

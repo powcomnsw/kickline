@@ -1,4 +1,4 @@
-//! Lumen's own look: always dark (it's used in dark rooms), a legible font
+//! Kickline's own look: always dark (it's used in dark rooms), a legible font
 //! bundled with the app, and one accent per theme instead of egui's stock blue.
 
 use eframe::egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle};

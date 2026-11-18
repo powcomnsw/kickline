@@ -1,7 +1,7 @@
 //! Ableton Link: follow rekordbox's tempo and beat over the network.
 //!
 //! In rekordbox (Performance mode) press LINK in the global section and turn on
-//! LINK on the decks. Lumen joins the same Link session and takes the beat
+//! LINK on the decks. Kickline joins the same Link session and takes the beat
 //! position straight from it, so beat-locked effects have no audio delay.
 
 pub struct LinkStatus {
@@ -48,7 +48,7 @@ impl LinkSync {
     }
 }
 
-/// Stand-in when Lumen is built without the `link` feature.
+/// Stand-in when Kickline is built without the `link` feature.
 #[cfg(not(feature = "link"))]
 pub struct LinkSync {
     beat: f64,

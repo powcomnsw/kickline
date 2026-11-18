@@ -1,32 +1,32 @@
 LUMEN FOR macOS
 
 Install
-  Drag Lumen into the Applications folder.
+  Drag Kickline into the Applications folder.
 
 First launch
-  If macOS says Lumen "can't be opened" or is from an unidentified developer:
-    1. Try to open Lumen once and dismiss the message.
+  If macOS says Kickline "can't be opened" or is from an unidentified developer:
+    1. Try to open Kickline once and dismiss the message.
     2. Open System Settings > Privacy & Security.
-    3. Scroll down and click "Open Anyway" next to Lumen, then confirm.
+    3. Scroll down and click "Open Anyway" next to Kickline, then confirm.
   You only need to do this once.
 
-Permissions Lumen asks for
+Permissions Kickline asks for
   System Audio Recording - to hear rekordbox directly. Say Allow.
   Microphone             - only if you use an audio interface or BlackHole.
   Local Network          - for Art-Net / sACN and Ableton Link. Say Allow.
   If you said Don't Allow by accident, turn them on in
   System Settings > Privacy & Security > Screen & System Audio Recording /
-  Microphone / Local Network, then quit and reopen Lumen.
+  Microphone / Local Network, then quit and reopen Kickline.
 
-Getting rekordbox audio into Lumen (macOS 14.2 or newer) - recommended
+Getting rekordbox audio into Kickline (macOS 14.2 or newer) - recommended
   1. Start rekordbox and play a track.
-  2. In Lumen open Audio and click "Use rekordbox (direct, no BlackHole)".
+  2. In Kickline open Audio and click "Use rekordbox (direct, no BlackHole)".
   You keep hearing everything through your controller as normal.
 
 Locking the lights to rekordbox's beat (Ableton Link)
   1. rekordbox must be in Performance mode. Click LINK in the global section,
      and LINK on the decks you play.
-  2. In Lumen click "Link" in the top bar. It shows the peer count and BPM.
+  2. In Kickline click "Link" in the top bar. It shows the peer count and BPM.
   3. Use "Beat" and "Bar" as triggers (Next clip on, Audio flash) for flashes
      that land exactly on the beat. "Fire early" (Audio > Timing & sync)
      cancels the delay of your nodes and fixtures; start around 20 ms.
@@ -37,7 +37,7 @@ Older macOS, or if you prefer BlackHole
      tick your speakers/controller AND BlackHole 2ch.
   3. In rekordbox Preferences > Audio, set the output to that Multi-Output Device
      (so you still hear it), or to BlackHole directly.
-  4. In Lumen open Audio and choose "BlackHole 2ch" as the source.
+  4. In Kickline open Audio and choose "BlackHole 2ch" as the source.
 
 Art-Net networking
   Plug the Mac into the same switch as your node. Many nodes use 2.x.x.x:
@@ -50,5 +50,5 @@ Something not working?
   A file named lumen-report-....json appears on your Desktop. Send that file.
 
 Files
-  Projects:       ~/Documents/Lumen
-  Crash reports:  ~/Library/Application Support/Lumen/crashes
+  Projects:       ~/Documents/Kickline
+  Crash reports:  ~/Library/Application Support/Kickline/crashes

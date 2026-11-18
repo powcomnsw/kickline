@@ -109,7 +109,7 @@ pub fn install_panic_hook() {
             .map(|e| format!("[{:>8.2}s {:?} {}] {}", e.t, e.level, e.source, e.message))
             .collect();
         let text = format!(
-            "Lumen {} crashed at {iso}\nOS: {} {}\n\n{info}\n\nBacktrace:\n{bt}\n\nRecent log:\n{}\n",
+            "Kickline {} crashed at {iso}\nOS: {} {}\n\n{info}\n\nBacktrace:\n{bt}\n\nRecent log:\n{}\n",
             env!("CARGO_PKG_VERSION"),
             std::env::consts::OS,
             std::env::consts::ARCH,

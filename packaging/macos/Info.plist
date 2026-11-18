@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Lumen</string>
+	<string>Kickline</string>
 	<key>CFBundleDisplayName</key>
-	<string>Lumen</string>
+	<string>Kickline</string>
 	<key>CFBundleIdentifier</key>
-	<string>app.lumen.Lumen</string>
+	<string>app.lumen.Kickline</string>
 	<key>CFBundleExecutable</key>
-	<string>Lumen</string>
+	<string>Kickline</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
@@ -28,18 +28,18 @@
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
-	<!-- Shown when Lumen first listens to audio (rekordbox via BlackHole, an interface, a mic). -->
+	<!-- Shown when Kickline first listens to audio (rekordbox via BlackHole, an interface, a mic). -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Lumen listens to your music (for example rekordbox through BlackHole) to make the lights react to bass, kicks, snares and hi-hats. Audio is analysed live and never recorded.</string>
+	<string>Kickline listens to your music (for example rekordbox through BlackHole) to make the lights react to bass, kicks, snares and hi-hats. Audio is analysed live and never recorded.</string>
 	<!-- macOS 14.2+: needed to capture rekordbox's audio directly (no BlackHole). -->
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>Lumen captures rekordbox's output directly so the lights react to the music without BlackHole. Audio is analysed live and never recorded.</string>
+	<string>Kickline captures rekordbox's output directly so the lights react to the music without BlackHole. Audio is analysed live and never recorded.</string>
 	<!-- Keep DMX running when the window is hidden or another app is in front. -->
 	<key>NSAppSleepDisabled</key>
 	<true/>
 	<!-- macOS 15+: needed to send Art-Net / sACN to lighting nodes on your network. -->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Lumen sends Art-Net and sACN to your lighting controllers, looks for Art-Net nodes, and syncs to rekordbox with Ableton Link.</string>
+	<string>Kickline sends Art-Net and sACN to your lighting controllers, looks for Art-Net nodes, and syncs to rekordbox with Ableton Link.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Open source, MIT OR Apache-2.0</string>
 </dict>

@@ -101,7 +101,7 @@ pub fn explain_send_error(e: &io::Error) -> &'static str {
     // EHOSTUNREACH: 65 on macOS, 113 on Linux. On macOS 15+ this is what you get
     // when the app hasn't been allowed on the Local Network.
     if code == 65 || code == 113 || e.kind() == io::ErrorKind::HostUnreachable {
-        return "Host unreachable. On macOS: System Settings > Privacy & Security > Local Network, allow Lumen. Otherwise check the cable / Wi-Fi and the target IP.";
+        return "Host unreachable. On macOS: System Settings > Privacy & Security > Local Network, allow Kickline. Otherwise check the cable / Wi-Fi and the target IP.";
     }
     if code == 51 || code == 101 || e.kind() == io::ErrorKind::NetworkUnreachable {
         return "Network unreachable: no interface on that subnet. Give your computer an IP in the same range as the node (e.g. 2.x.x.x or 192.168.x.x).";

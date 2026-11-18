@@ -237,8 +237,8 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
         }
         ui.weak(&app.audio_status);
         ui.collapsing("Getting rekordbox audio in", |ui| {
-            ui.label("Lumen listens to what rekordbox plays and splits it into bands itself.");
-            ui.label("• macOS 14.2+: \"Use rekordbox (direct)\". The first time, allow Lumen under Privacy & Security › Screen & System Audio Recording.");
+            ui.label("Kickline listens to what rekordbox plays and splits it into bands itself.");
+            ui.label("• macOS 14.2+: \"Use rekordbox (direct)\". The first time, allow Kickline under Privacy & Security › Screen & System Audio Recording.");
             ui.label("• Windows: choose the device rekordbox outputs to, marked (loopback).");
             ui.label("• Or run a cable from the controller's booth out into an audio interface input.");
             ui.label("• BlackHole still works if you prefer it.");

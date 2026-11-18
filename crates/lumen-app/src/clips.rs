@@ -415,7 +415,7 @@ fn change_on_name(b: Option<AudioBand>) -> &'static str {
 }
 
 /// The palette strip above the clips: pick a palette, edit its colours,
-/// and choose when Lumen moves on to the next one.
+/// and choose when Kickline moves on to the next one.
 fn palette_bar(app: &mut View, ui: &mut egui::Ui) {
     let t = theme::current();
     let beat = app.e.comp.beat;

@@ -2,7 +2,7 @@
 //!
 //! `.qxf` is the format of QLC+'s fixture library (Apache-2.0) and one of the
 //! formats the Open Fixture Library exports, so this covers thousands of
-//! fixtures. Each mode becomes a Lumen fixture type:
+//! fixtures. Each mode becomes a Kickline fixture type:
 //!
 //! - colour and dimmer channels are driven from the image;
 //! - per-pixel "heads" become pixels laid out across the fixture;
@@ -75,7 +75,7 @@ fn colour_fn(name: &str) -> Option<ChannelFn> {
     })
 }
 
-/// (function, fine) for a channel `Preset`, if it's one Lumen drives.
+/// (function, fine) for a channel `Preset`, if it's one Kickline drives.
 fn preset_fn(p: &str) -> Option<(ChannelFn, bool)> {
     let (base, fine) = match p.strip_suffix("Fine") {
         Some(b) => (b, true),
@@ -88,7 +88,7 @@ fn preset_fn(p: &str) -> Option<(ChannelFn, bool)> {
     Some((f, fine))
 }
 
-/// A safe constant for a channel Lumen doesn't drive.
+/// A safe constant for a channel Kickline doesn't drive.
 fn hold_value(ch: roxmltree::Node, preset: Option<&str>) -> u8 {
     if let Some(d) = ch.attribute("Default").and_then(|d| d.parse::<u8>().ok()) {
         return d;
@@ -189,7 +189,7 @@ impl QxfFixture {
         self.channels.iter().find(|c| c.name == name)
     }
 
-    /// Turn one mode into a Lumen fixture type.
+    /// Turn one mode into a Kickline fixture type.
     pub fn to_type(&self, mode: usize, source: &str) -> Result<FixtureType, String> {
         let m = self.modes.get(mode).ok_or("no such mode")?;
         let head_of = |i: usize| m.heads.iter().position(|h| h.contains(&i));
@@ -226,7 +226,7 @@ impl QxfFixture {
         })
     }
 
-    /// How many of a mode's channels Lumen drives from the image.
+    /// How many of a mode's channels Kickline drives from the image.
     pub fn driven_channels(&self, mode: usize) -> usize {
         self.modes.get(mode).map_or(0, |m| {
             m.channels

@@ -1,4 +1,4 @@
-//! Lumen core: frame buffers, generators, effects, blending and the
+//! Kickline core: frame buffers, generators, effects, blending and the
 //! composition (layers x clips) that is rendered every tick.
 
 pub mod audio;

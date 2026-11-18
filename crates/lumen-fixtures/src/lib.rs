@@ -30,7 +30,7 @@ pub enum ChannelFn {
     Cyan,
     Magenta,
     Yellow,
-    /// UV emitter. Lumen has no UV in its image, so this stays off.
+    /// UV emitter. Kickline has no UV in its image, so this stays off.
     Uv,
     /// Intensity. When a pixel has a dimmer, the colour channels are
     /// normalised so the dimmer carries the brightness.
