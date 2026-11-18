@@ -86,6 +86,12 @@ Key decisions:
 - [x] Sensitivity per drum with a live meter
 - [x] ArtSync and per-lumiverse refresh cap
 
+## Strip effects (done)
+
+- [x] Strip clips in the normal grid: meteor, fill, burst, segments, sparkle, meter, dashes, alternate
+- [x] Reverse, mirror (from the middle), ripple across strips; palette colours; audio triggers
+- [ ] Strip effects in Advanced Output's "Show pixel colours"
+
 ## Known limitations of v0.6
 - Imported moving heads light up but don't move yet: pan/tilt are held centred.
 - Drum detection is tuned for four-on-the-floor dance music; use the Tuning sliders for other styles.

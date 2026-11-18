@@ -4,7 +4,7 @@ use eframe::egui::{Align2, Color32, CornerRadius, FontId, Rect, RichText, Sense,
 use lumen_core::{AudioBands, Frame};
 use eframe::egui;
 use lumen_core::palette::Rgb;
-use lumen_core::{AudioBand, AudioLink, BlendMode, Clip, Effect, Generator, Layer, Paint, Palette};
+use lumen_core::{AudioBand, AudioLink, BlendMode, Clip, Effect, Generator, Layer, Paint, Palette, StripClip, StripEffect, StripPixel};
 
 fn generator_presets() -> Vec<Generator> {
     vec![
@@ -84,7 +84,17 @@ fn paint_edit(ui: &mut egui::Ui, paint: &mut Paint, palette: &[Rgb; 4]) {
 
 fn clip_menu(ui: &mut egui::Ui, id: (usize, usize), slot: &mut Option<Clip>, palette: &[Rgb; 4]) {
     ui.set_min_width(240.0);
-    ui.label("Source");
+    ui.label("Strip effects").on_hover_text("These run along every strip (or fixture) on its own, whatever angle it's at. They're drawn on top of the picture layers.");
+    ui.horizontal_wrapped(|ui| {
+        for (name, sc) in StripClip::presets() {
+            let current = slot.as_ref().is_some_and(|c| c.name == name && c.generator.is_strip());
+            if ui.selectable_label(current, name).clicked() {
+                *slot = Some(Clip::new(name, Generator::Strip(sc)));
+            }
+        }
+    });
+    ui.add_space(4.0);
+    ui.label("Picture");
     ui.horizontal_wrapped(|ui| {
         for g in generator_presets() {
             let current = slot.as_ref().map(|c| c.generator.kind_name());
@@ -104,6 +114,7 @@ fn clip_menu(ui: &mut egui::Ui, id: (usize, usize), slot: &mut Option<Clip>, pal
         ui.text_edit_singleline(&mut clip.name);
     });
     match &mut clip.generator {
+        Generator::Strip(sc) => strip_edit(ui, id, sc, palette),
         Generator::Solid { color } => paint_edit(ui, color, palette),
         Generator::PaletteWash { beats_per_cycle } => {
             ui.label("The four palette colours, blending into each other.");
@@ -239,7 +250,19 @@ fn clip_cell(ui: &mut egui::Ui, clip: Option<&Clip>, active: bool, color: Color3
         Some(c) => {
             // Render the clip itself, small, as its thumbnail.
             let mut f = Frame::transparent(32, 18);
-            c.generator.render(&mut f, beat, audio, palette);
+            if let Generator::Strip(sc) = c.generator {
+                // Four little strips, so you can see it run along each one.
+                for (k, row) in [2usize, 6, 10, 14].into_iter().enumerate() {
+                    for x in 0..32 {
+                        let px = StripPixel { fixture: k, fixtures: 4, index: x, count: 32, x: x as f32 / 31.0, y: 0.0 };
+                        let col = sc.shade(px, beat, audio, palette);
+                        f.pixels[row * 32 + x] = col;
+                        f.pixels[(row + 1) * 32 + x] = col;
+                    }
+                }
+            } else {
+                c.generator.render(&mut f, beat, audio, palette);
+            }
             let inner = rect;
             p.rect_filled(inner, radius, Color32::BLACK);
             let (cw, ch) = (inner.width() / f.width as f32, inner.height() / f.height as f32);
@@ -481,4 +504,70 @@ fn palette_bar(app: &mut View, ui: &mut egui::Ui) {
     if let Some(i) = pick {
         pals.select(i, beat);
     }
+}
+
+const HIT_BANDS: [AudioBand; 5] = [AudioBand::Kick, AudioBand::Snare, AudioBand::HiHat, AudioBand::Beat, AudioBand::Bar];
+
+fn hit_band(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, band: &mut AudioBand, label: &str) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        egui::ComboBox::from_id_salt(id).selected_text(band.name()).show_ui(ui, |ui| {
+            for b in HIT_BANDS {
+                ui.selectable_value(band, b, b.name());
+            }
+        });
+    });
+}
+
+/// Settings for a strip clip.
+fn strip_edit(ui: &mut egui::Ui, id: (usize, usize), sc: &mut StripClip, palette: &[Rgb; 4]) {
+    match &mut sc.effect {
+        StripEffect::Meteor { color, beats, tail, bounce } => {
+            paint_edit(ui, color, palette);
+            ui.add(egui::Slider::new(beats, 0.25..=16.0).logarithmic(true).text("beats per run"));
+            ui.add(egui::Slider::new(tail, 0.05..=1.0).text("tail length"));
+            ui.checkbox(bounce, "Bounce back");
+        }
+        StripEffect::Fill { color, beats } => {
+            paint_edit(ui, color, palette);
+            ui.add(egui::Slider::new(beats, 0.25..=32.0).logarithmic(true).text("beats to fill"));
+        }
+        StripEffect::Burst { color, band } => {
+            paint_edit(ui, color, palette);
+            hit_band(ui, ("sb", id), band, "Burst on");
+        }
+        StripEffect::Segments { color, count, band } => {
+            paint_edit(ui, color, palette);
+            ui.add(egui::Slider::new(count, 2..=16).text("segments"));
+            hit_band(ui, ("ss", id), band, "New segment on");
+        }
+        StripEffect::Sparkle { color, density, band } => {
+            paint_edit(ui, color, palette);
+            ui.add(egui::Slider::new(density, 0.05..=1.0).text("density"));
+            crate::util::band_combo(ui, ("sp", id), band, false);
+        }
+        StripEffect::Meter { color, band } => {
+            paint_edit(ui, color, palette);
+            ui.horizontal(|ui| {
+                ui.label("Follows");
+                crate::util::band_combo(ui, ("sm", id), band, false);
+            });
+        }
+        StripEffect::Dashes { color, beats, count } => {
+            paint_edit(ui, color, palette);
+            ui.add(egui::Slider::new(count, 1..=32).text("dashes"));
+            ui.add(egui::Slider::new(beats, 0.25..=16.0).logarithmic(true).text("beats per step"));
+        }
+        StripEffect::Alternate { color, band } => {
+            paint_edit(ui, color, palette);
+            hit_band(ui, ("sa", id), band, "Swap on");
+        }
+    }
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut sc.reverse, "Reverse").on_hover_text("Run from the other end");
+        ui.checkbox(&mut sc.mirror, "From the middle").on_hover_text("Mirror: run from the middle out to both ends");
+    });
+    ui.add(egui::Slider::new(&mut sc.stagger, 0.0..=4.0).text("ripple across strips (beats)"))
+        .on_hover_text("Start each strip a little later than the one before, so the effect ripples across the rig. 0 = all together.");
 }

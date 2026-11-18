@@ -1,7 +1,7 @@
 use crate::audio::{AudioBand, AudioBands, AudioLink};
 use crate::blend::{composite, BlendMode};
 use crate::effect::Effect;
-use crate::frame::Frame;
+use crate::frame::{Frame, Rgba};
 use crate::generator::Generator;
 use crate::palette::{Paint, Palettes};
 use serde::{Deserialize, Serialize};
@@ -146,11 +146,22 @@ impl Composition {
         bg.clips[5] = Some(Clip::new("Palette wash", Generator::PaletteWash { beats_per_cycle: 16.0 }));
         bg.effects.push(Effect::AudioBrightness { band: AudioBand::Bass, amount: 0.7 });
 
+        // Strip effects on top, none playing: click one to try it.
+        let mut strips = Layer::new("Strip effects", cols);
+        strips.blend = BlendMode::Add;
+        let presets = crate::strip::StripClip::presets();
+        for (slot, want) in ["Meteor", "Kick burst", "Hi-hat sparkle", "Bass meter", "Fill to the bar", "Wave across strips"].iter().enumerate() {
+            if let Some((name, sc)) = presets.iter().find(|(n, _)| n == want) {
+                strips.clips[slot] = Some(Clip::new(*name, Generator::Strip(*sc)));
+            }
+        }
+
+        c.layers.push(strips);
         c.layers.push(kick);
         c.layers.push(fx);
         c.layers.push(bg);
-        c.trigger(0, 0);
-        c.trigger(2, 0);
+        c.trigger(1, 0);
+        c.trigger(3, 0);
         c
     }
 
@@ -233,6 +244,34 @@ impl Composition {
         }
     }
 
+    /// Everything needed to lay strip clips over the mapped canvas this frame.
+    pub fn strip_stage(&self) -> StripStage {
+        let palette = self.palettes.current(self.beat);
+        let mut passes = Vec::new();
+        for layer in self.layers.iter().rev() {
+            if layer.bypass {
+                continue;
+            }
+            let Some(Some(clip)) = layer.active.and_then(|i| layer.clips.get(i)) else { continue };
+            let Generator::Strip(sc) = clip.generator else { continue };
+            let mut opacity = layer.opacity;
+            if let Some(link) = layer.audio_opacity {
+                opacity *= link.factor(&self.audio);
+            }
+            if opacity <= 0.0 {
+                continue;
+            }
+            passes.push(StripPass {
+                clip: sc,
+                beat: (self.beat - layer.trigger_beat).max(0.0),
+                opacity,
+                blend: layer.blend,
+                effects: layer.effects.clone(),
+            });
+        }
+        StripStage { passes, palette, audio: self.audio, master: self.master }
+    }
+
     pub fn render(&self) -> Frame {
         let mut out = Frame::black(self.width, self.height);
         let mut scratch = Frame::transparent(self.width, self.height);
@@ -242,6 +281,9 @@ impl Composition {
                 continue;
             }
             let Some(Some(clip)) = layer.active.and_then(|i| layer.clips.get(i)) else { continue };
+            if clip.generator.is_strip() {
+                continue; // drawn per pixel at output time (strip_stage)
+            }
             let local_beat = (self.beat - layer.trigger_beat).max(0.0);
             scratch.pixels.fill(Default::default());
             clip.generator.render(&mut scratch, local_beat, &self.audio, &palette);
@@ -263,9 +305,75 @@ impl Composition {
     }
 }
 
+/// One active strip clip with its layer's settings.
+#[derive(Clone, Debug)]
+pub struct StripPass {
+    pub clip: crate::strip::StripClip,
+    pub beat: f64,
+    pub opacity: f32,
+    pub blend: BlendMode,
+    pub effects: Vec<crate::effect::Effect>,
+}
+
+/// The strip layers of one frame, ready to shade pixels.
+#[derive(Clone, Debug, Default)]
+pub struct StripStage {
+    pub passes: Vec<StripPass>,
+    pub palette: [crate::palette::Rgb; 4],
+    pub audio: AudioBands,
+    pub master: f32,
+}
+
+impl StripStage {
+    pub fn is_empty(&self) -> bool {
+        self.passes.is_empty()
+    }
+
+    /// Lay the strip layers over a pixel's mapped colour.
+    pub fn shade(&self, base: Rgba, p: crate::strip::StripPixel) -> Rgba {
+        if self.passes.is_empty() {
+            return base;
+        }
+        let mut px = Frame::new(1, 1, base);
+        let mut src = Frame::transparent(1, 1);
+        for pass in &self.passes {
+            let mut c = pass.clip.shade(p, pass.beat, &self.audio, &self.palette);
+            c.r *= self.master;
+            c.g *= self.master;
+            c.b *= self.master;
+            src.pixels[0] = c;
+            for e in &pass.effects {
+                e.apply(&mut src, pass.beat, &self.audio);
+            }
+            composite(&mut px, &src, pass.blend, pass.opacity);
+        }
+        px.pixels[0]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_layers_skip_the_canvas_and_shade_pixels() {
+        use crate::strip::{StripClip, StripEffect, StripPixel};
+        let mut c = Composition::new(4, 4, 1);
+        let mut l = Layer::new("Strips", 1);
+        l.blend = BlendMode::Normal;
+        l.clips[0] = Some(Clip::new("Fill", Generator::Strip(StripClip::new(StripEffect::Fill { color: Paint::Rgb([0.0, 1.0, 0.0]), beats: 4.0 }))));
+        c.layers.push(l);
+        c.trigger(0, 0);
+        c.beat = 2.0;
+        // Nothing on the canvas…
+        assert!(c.render().pixels.iter().all(|p| p.g == 0.0));
+        // …but pixels along a strip get it.
+        let st = c.strip_stage();
+        let base = Rgba::rgb(1.0, 0.0, 0.0);
+        let at = |x: f32| st.shade(base, StripPixel { fixture: 0, fixtures: 1, index: 0, count: 10, x, y: 0.0 });
+        assert_eq!((at(0.1).r, at(0.1).g), (0.0, 1.0));
+        assert_eq!((at(0.9).r, at(0.9).g), (1.0, 0.0));
+    }
 
     #[test]
     fn replace_show_keeps_playback() {
@@ -409,7 +517,8 @@ mod tests {
         let s = serde_json::to_string(&c).unwrap();
         let back: Composition = serde_json::from_str(&s).unwrap();
         assert_eq!(back.layers.len(), c.layers.len());
-        assert_eq!(back.layers[2].clips[0].as_ref().unwrap().name, "Rainbow");
-        assert_eq!(back.layers[1].advance_on, Some(AudioBand::Snare));
+        assert_eq!(back.layers[3].clips[0].as_ref().unwrap().name, "Rainbow");
+        assert_eq!(back.layers[2].advance_on, Some(AudioBand::Snare));
+        assert!(back.layers[0].clips[0].as_ref().unwrap().generator.is_strip());
     }
 }

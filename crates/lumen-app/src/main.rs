@@ -306,6 +306,28 @@ impl View<'_> {
         let (resp, painter) = ui.allocate_painter(Vec2::new(w, w / aspect), Sense::hover());
         util::paint_frame(&painter, resp.rect, frame);
         let aspect = self.e.output.aspect;
+        // Strip clips aren't part of the picture: show them as the pixels the
+        // lights will actually get.
+        let stage = self.e.comp.strip_stage();
+        if !stage.is_empty() {
+            let n = self.e.output.fixtures.len();
+            let dark = painter.clone();
+            dark.rect_filled(resp.rect, 0.0, Color32::from_black_alpha(150));
+            for (fi, fx) in self.e.output.fixtures.iter().enumerate() {
+                let Some(ty) = self.e.output.types.get(fx.type_id) else { continue };
+                let cells = fx.pixel_local(ty);
+                let pos = fx.pixel_positions(aspect, ty);
+                let count = cells.len();
+                let r = (resp.rect.width() / 260.0).clamp(1.2, 3.5);
+                for (i, ((lx, ly), (u, v))) in cells.iter().zip(pos).enumerate() {
+                    let base = fx.sample_cell(aspect, ty, frame, *lx, *ly);
+                    let p = lumen_core::StripPixel { fixture: fi, fixtures: n, index: i, count, x: lx + 0.5, y: ly + 0.5 };
+                    let c = stage.shade(base, p);
+                    let col = Color32::from_rgb((c.r.clamp(0.0, 1.0) * 255.0) as u8, (c.g.clamp(0.0, 1.0) * 255.0) as u8, (c.b.clamp(0.0, 1.0) * 255.0) as u8);
+                    painter.circle_filled(util::to_screen(resp.rect, u, v), r, col);
+                }
+            }
+        }
         for fx in &self.e.output.fixtures {
             let pts: Vec<_> = fx
                 .corners(aspect)

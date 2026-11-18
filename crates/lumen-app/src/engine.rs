@@ -238,33 +238,39 @@ impl Engine {
     fn send_dmx(&mut self) {
         self.output.aspect = self.comp.width as f32 / self.comp.height as f32;
         let t = Instant::now();
-        self.dmx = match &self.test {
-            Some(t) if t.fixture < self.output.fixtures.len() => {
-                let (fixture, step, k) = (t.fixture, t.step(), t.phase());
-                self.output.render_dmx_by(&self.frame, &move |fi, i, n, _| {
-                    if fi != fixture {
-                        return Rgba::BLACK;
-                    }
-                    match step {
-                        TestStep::Red => Rgba::rgb(1.0, 0.0, 0.0),
-                        TestStep::Green => Rgba::rgb(0.0, 1.0, 0.0),
-                        TestStep::Blue => Rgba::rgb(0.0, 0.0, 1.0),
-                        TestStep::White => Rgba::rgb(1.0, 1.0, 1.0),
-                        TestStep::Run => {
-                            // A short white dot travelling in wiring order, first pixel stays red.
-                            let pos = (k * n as f32) as usize;
-                            if i == 0 {
-                                Rgba::rgb(1.0, 0.0, 0.0)
-                            } else if i.abs_diff(pos) <= (n / 40).max(1) {
-                                Rgba::rgb(1.0, 1.0, 1.0)
-                            } else {
-                                Rgba::BLACK
-                            }
+        // Strip clips are laid over the mapped canvas per pixel; the fixture
+        // test overrides everything.
+        let stage = self.comp.strip_stage();
+        let test = self.test.filter(|t| t.fixture < self.output.fixtures.len()).map(|t| (t.fixture, t.step(), t.phase()));
+        self.dmx = if stage.is_empty() && test.is_none() {
+            self.output.render_dmx(&self.frame)
+        } else {
+            self.output.render_dmx_by(&self.frame, &move |p, sampled| {
+                let Some((fixture, step, k)) = test else {
+                    return stage.shade(sampled, p);
+                };
+                let (fi, i, n) = (p.fixture, p.index, p.count);
+                if fi != fixture {
+                    return Rgba::BLACK;
+                }
+                match step {
+                    TestStep::Red => Rgba::rgb(1.0, 0.0, 0.0),
+                    TestStep::Green => Rgba::rgb(0.0, 1.0, 0.0),
+                    TestStep::Blue => Rgba::rgb(0.0, 0.0, 1.0),
+                    TestStep::White => Rgba::rgb(1.0, 1.0, 1.0),
+                    TestStep::Run => {
+                        // A short white dot travelling in wiring order, first pixel stays red.
+                        let pos = (k * n as f32) as usize;
+                        if i == 0 {
+                            Rgba::rgb(1.0, 0.0, 0.0)
+                        } else if i.abs_diff(pos) <= (n / 40).max(1) {
+                            Rgba::rgb(1.0, 1.0, 1.0)
+                        } else {
+                            Rgba::BLACK
                         }
                     }
-                })
-            }
-            _ => self.output.render_dmx(&self.frame),
+                }
+            })
         };
         Metrics::smooth(&mut self.metrics.dmx_ms, t.elapsed().as_secs_f32() * 1000.0);
         if !self.output_enabled {

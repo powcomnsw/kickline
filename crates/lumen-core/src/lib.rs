@@ -9,6 +9,7 @@ pub mod effect;
 pub mod frame;
 pub mod generator;
 pub mod palette;
+pub mod strip;
 
 pub use audio::{AudioBand, AudioBands, AudioLink};
 pub use blend::BlendMode;
@@ -17,3 +18,5 @@ pub use effect::Effect;
 pub use frame::{Frame, Rgba};
 pub use generator::Generator;
 pub use palette::{Paint, Palette, Palettes};
+pub use strip::{StripClip, StripEffect, StripPixel};
+pub use composition::{StripPass, StripStage};

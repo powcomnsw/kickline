@@ -21,6 +21,9 @@ pub enum Generator {
     AudioFlash { band: AudioBand, color: Paint },
     /// The four palette colours side by side, drifting slowly sideways.
     PaletteWash { beats_per_cycle: f32 },
+    /// An effect that runs along each strip, worked out at output time.
+    /// Draws nothing on the canvas.
+    Strip(crate::strip::StripClip),
     /// Five frequency bands as vertical bars, each in its band colour
     /// (sub, bass, low mid, high mid, highs from left to right).
     Bands,
@@ -37,11 +40,17 @@ impl Generator {
             Generator::AudioFlash { .. } => "Audio flash",
             Generator::Bands => "Bands",
             Generator::PaletteWash { .. } => "Palette wash",
+            Generator::Strip(c) => c.name(),
         }
+    }
+
+    pub fn is_strip(&self) -> bool {
+        matches!(self, Generator::Strip(_))
     }
 
     pub fn render(&self, frame: &mut Frame, beat: f64, audio: &AudioBands, palette: &[Rgb; 4]) {
         match *self {
+            Generator::Strip(_) => {}
             Generator::PaletteWash { beats_per_cycle } => {
                 let shift = (beat / beats_per_cycle.max(0.001) as f64).fract() as f32;
                 frame.fill_with(|u, _| {

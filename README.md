@@ -168,6 +168,7 @@ crash reports and (if you choose) your project. Nothing is uploaded.
 | Look | Three dark themes (Tungsten, Gel, Stage) for dark venues, Atkinson Hyperlegible font, live clip thumbnails, a colour per layer |
 | Composition | Layers × clip grid, column triggers, opacity / blend / bypass / effects per layer, master, BPM clock, right-click clip editing |
 | Generators | Solid, Rainbow, Strobe, Chase, Plasma, Audio flash, Bands, Palette wash |
+| Strip effects | Run along every strip on its own, at any angle: Meteor (and bounce), Fill, Kick burst, Segments, Sparkle, Meter, Dashes, Alternate. Reverse, from-the-middle and a ripple across strips. Shown live in the preview |
 | Effects | Brightness, Hue shift, Invert, Pulse, Audio brightness, Audio hue |
 | Colour palettes | Clips use palette colour 1–4 or a fixed colour; 8 palettes to start, editable; change on Bar / Beat / Kick / Snare / Hi-hat every N, with a crossfade |
 | Smooth output | ArtSync so every universe changes on the same frame, per-controller refresh cap for pixel controllers that glitch when fed too fast |
