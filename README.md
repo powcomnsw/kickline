@@ -137,7 +137,7 @@ version opens in a newer one.
 
 Before adding fixtures, select a lumiverse in Advanced Output and click
 **Sweep universes**. Kickline lights every channel of one universe at a time
-(half brightness, 1.5 s each, or step with ◀ ▶) and shows which universe is on,
+(a short chase across each universe, 1.5 s each, or step with ◀ ▶) and shows which universe is on,
 with its Art-Net Net:Sub-Net:Universe. Whatever lights up is listening to that
 universe. If it lights one step late, your controller counts from 1. Moving heads
 and strobes will move or flash during the sweep.
