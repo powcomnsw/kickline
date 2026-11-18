@@ -13,6 +13,17 @@ pub const SACN_PORT: u16 = 5568;
 
 /// Build an ArtDmx packet. `universe` is the 15-bit port-address (0-based).
 /// `data` is padded to an even length (min 2) as the spec requires.
+/// ArtSync: tells every node to show the frame it has just received, all at
+/// the same moment, so universes don't tear against each other.
+pub fn artsync_packet() -> Vec<u8> {
+    let mut p = Vec::with_capacity(14);
+    p.extend_from_slice(b"Art-Net\0");
+    p.extend_from_slice(&[0x00, 0x52]); // OpSync, little-endian
+    p.extend_from_slice(&[0, 14]); // protocol version 14
+    p.extend_from_slice(&[0, 0]); // Aux1, Aux2
+    p
+}
+
 pub fn artnet_packet(universe: u16, sequence: u8, data: &[u8]) -> Vec<u8> {
     let mut len = data.len().min(512);
     if len % 2 == 1 {
@@ -81,6 +92,8 @@ pub struct SendStats {
     pub last_error_hint: Option<&'static str>,
     /// Times a socket was rebuilt after the network changed.
     pub reconnects: u64,
+    /// ArtSync packets sent.
+    pub syncs: u64,
 }
 
 /// State of the network port a lumiverse sends through.
@@ -190,6 +203,29 @@ impl Sender {
         *s
     }
 
+    /// Send ArtSync once through a port, as a directed broadcast: to the
+    /// subnet of that port, or of whichever port reaches `towards`.
+    pub fn send_artsync(&mut self, towards: Ipv4Addr, via: Option<&str>) -> io::Result<()> {
+        let port = self.artnet_port;
+        let ifaces = self.ifaces.clone();
+        let pkt = artsync_packet();
+        let res = self.route(via).and_then(|r| {
+            let dest = match &r.iface {
+                Some(i) => i.broadcast,
+                None => ifaces.iter().find(|i| i.contains(towards)).map(|i| i.broadcast).unwrap_or(Ipv4Addr::BROADCAST),
+            };
+            r.socket.send_to(&pkt, SocketAddr::from((dest, port)))
+        });
+        match res {
+            Ok(_) => {
+                self.stats.syncs += 1;
+                Ok(())
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Send one universe through whatever port the computer picks.
     pub fn send(&mut self, protocol: Protocol, target: Ipv4Addr, universe: u16, data: &[u8]) -> io::Result<()> {
         self.send_via(protocol, target, universe, data, None)
@@ -253,6 +289,15 @@ mod tests {
         assert_eq!(&p[14..16], &[0x02, 0x01]); // SubUni then Net
         assert_eq!(&p[16..18], &[0, 4]); // odd length padded to 4
         assert_eq!(&p[18..], &[1, 2, 3, 0]);
+    }
+
+    #[test]
+    fn artsync_layout() {
+        let p = artsync_packet();
+        assert_eq!(p.len(), 14);
+        assert_eq!(&p[0..8], b"Art-Net\0");
+        assert_eq!(&p[8..10], &[0x00, 0x52]);
+        assert_eq!(&p[10..14], &[0, 14, 0, 0]);
     }
 
     #[test]

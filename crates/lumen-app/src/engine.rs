@@ -91,6 +91,10 @@ pub struct Engine {
     /// Fixture test in progress: everything else dark, this fixture cycles
     /// red, green, blue, white, then a dot running from its first pixel.
     pub test: Option<FixtureTest>,
+    /// Per drum (kick, snare, hi-hat): latest rise and the rise needed for a hit (dB).
+    pub onset: [(f32, f32); 3],
+    /// When each lumiverse last sent, for its refresh-rate cap.
+    last_sent: std::collections::HashMap<usize, Instant>,
 }
 
 impl Engine {
@@ -119,6 +123,8 @@ impl Engine {
             last_hit_seen: None,
             shutdown: false,
             test: None,
+            onset: [(0.0, 0.0); 3],
+            last_sent: Default::default(),
         }
     }
 
@@ -213,11 +219,13 @@ impl Engine {
                 let mut buf = vec![0.0; n];
                 beat.fill(&mut buf);
                 analyzer.process(&buf);
+                self.onset = analyzer.onset_meter();
                 analyzer.bands()
             }
             AudioSource::Live(feed) => {
                 if let Ok(mut a) = feed.analyzer.lock() {
                     a.settings = settings;
+                    self.onset = a.onset_meter();
                 }
                 feed.bands()
             }
@@ -285,11 +293,24 @@ impl Engine {
         let sender = self.sender.as_mut().unwrap();
         let mut sent = 0;
         let mut errors = Vec::new();
+        let now = Instant::now();
+        // Lumiverses with a refresh cap skip frames until their time comes.
+        let due: Vec<bool> = self
+            .output
+            .lumiverses
+            .iter()
+            .enumerate()
+            .map(|(i, l)| match l.max_hz.filter(|&hz| hz > 0) {
+                Some(hz) => self.last_sent.get(&i).is_none_or(|t| now.duration_since(*t).as_secs_f32() >= 1.0 / hz as f32 - 0.002),
+                None => true,
+            })
+            .collect();
+        let mut sent_lv = std::collections::BTreeSet::new();
         for ((lv, uni), data) in &self.dmx {
             let Some(l) = self.output.lumiverses.get(*lv) else {
                 continue;
             };
-            if !l.enabled {
+            if !l.enabled || !due.get(*lv).copied().unwrap_or(true) {
                 continue;
             }
             let target = match l.target.trim().parse::<Ipv4Addr>() {
@@ -305,8 +326,34 @@ impl Engine {
                 lumen_fixtures::Protocol::Sacn => lumen_output::Protocol::Sacn,
             };
             match sender.send_via(proto, target, *uni, data, l.interface.as_deref()) {
-                Ok(()) => sent += 1,
+                Ok(()) => {
+                    sent += 1;
+                    sent_lv.insert(*lv);
+                }
                 Err(e) => errors.push(format!("{}: {e}", l.name)),
+            }
+        }
+        // One ArtSync per network port after the whole frame, so every node
+        // switches to the new frame at once. Not used with broadcast ArtDmx.
+        let mut synced: Vec<(Option<String>, [u8; 3])> = Vec::new();
+        for &lv in &sent_lv {
+            self.last_sent.insert(lv, now);
+            let l = &self.output.lumiverses[lv];
+            if l.protocol != lumen_fixtures::Protocol::ArtNet || !l.sync {
+                continue;
+            }
+            let Ok(ip) = l.target.trim().parse::<Ipv4Addr>() else { continue };
+            if ip.octets()[3] == 255 {
+                continue;
+            }
+            let o = ip.octets();
+            let key = (l.interface.clone(), [o[0], o[1], o[2]]);
+            if synced.contains(&key) {
+                continue;
+            }
+            synced.push(key);
+            if let Err(e) = sender.send_artsync(ip, l.interface.as_deref()) {
+                errors.push(format!("{} (ArtSync): {e}", l.name));
             }
         }
         self.sender_stats = Some(sender.stats.clone());

@@ -80,6 +80,12 @@ Key decisions:
 - [x] Undo / redo, autosave, reopen last show, New / Open / Save as
 - [x] First-run setup guide, Test this light, jargon hover help
 
+## Lighting feel (done)
+
+- [x] Kick detection rebuilt: level-independent, tuned on loud mastered tracks with rolling basslines; snare false hits fixed
+- [x] Sensitivity per drum with a live meter
+- [x] ArtSync and per-lumiverse refresh cap
+
 ## Known limitations of v0.6
 - Imported moving heads light up but don't move yet: pan/tilt are held centred.
 - Drum detection is tuned for four-on-the-floor dance music; use the Tuning sliders for other styles.

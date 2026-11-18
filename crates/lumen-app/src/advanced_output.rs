@@ -276,6 +276,24 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_outpu
                     }
                 });
                 ui.end_row();
+                if l.protocol == Protocol::ArtNet {
+                    let bcast = is_broadcast(&l.target);
+                    ui.label("Frame sync").on_hover_text("ArtSync: after each frame, tells the controller to show all its universes at the same instant, so long runs of pixels don't tear. Controllers that don't support it just ignore it.");
+                    ui.add_enabled(!bcast, egui::Checkbox::new(&mut l.sync, if bcast { "needs the controller's IP" } else { "ArtSync" }))
+                        .on_disabled_hover_text("Frame sync only works when sending straight to a controller, not to 255.255.255.255.");
+                    ui.end_row();
+                }
+                ui.label("Refresh").on_hover_text("Some cheap pixel controllers glitch or flicker when sent frames too fast. If yours does, cap it here (30 Hz is a safe start).");
+                let name = |h: Option<u16>| match h {
+                    None => "As fast as Kickline runs".to_string(),
+                    Some(h) => format!("At most {h} Hz"),
+                };
+                egui::ComboBox::from_id_salt("lvhz").selected_text(name(l.max_hz)).show_ui(ui, |ui| {
+                    for h in [None, Some(40), Some(30), Some(25), Some(20)] {
+                        ui.selectable_value(&mut l.max_hz, h, name(h));
+                    }
+                });
+                ui.end_row();
                 ui.label("Enabled");
                 ui.checkbox(&mut l.enabled, "");
                 ui.end_row();

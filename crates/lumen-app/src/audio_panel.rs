@@ -257,20 +257,19 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
         for (i, b) in AudioBand::DRUMS.iter().enumerate() {
             meter(ui, *b, app.e.bands.get(*b), Some(app.e.bands.hits[i]));
         }
+        drum_tuning(app, ui);
         ui.strong(if app.e.link_status.as_ref().is_some_and(|s| s.peers > 0) { "Clock (Ableton Link)" } else { "Clock (BPM)" });
         for b in [AudioBand::Beat, AudioBand::Bar] {
             meter(ui, b, app.e.bands.get(b), None);
         }
 
         ui.collapsing("Tuning", |ui| {
-            egui::Grid::new("tune").num_columns(3).spacing([8.0, 4.0]).show(ui, |ui| {
+            egui::Grid::new("tune").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
                 ui.label("");
-                ui.weak("sensitivity");
-                ui.weak("fade (s)");
+                ui.weak("flash fade (s)");
                 ui.end_row();
                 for (i, b) in AudioBand::DRUMS.iter().enumerate() {
                     ui.label(b.name());
-                    ui.add(egui::Slider::new(&mut app.e.audio_settings.sensitivity[i], 0.3..=3.0));
                     ui.add(egui::Slider::new(&mut app.e.audio_settings.pulse_decay[i], 0.02..=0.6));
                     ui.end_row();
                 }
@@ -294,5 +293,31 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                 ui.end_row();
             }
         });
+    });
+}
+
+/// Sensitivity per drum, with a live "how close to a hit" bar: the bar is the
+/// latest rise in that band; reaching the line counts as a hit.
+fn drum_tuning(app: &mut View, ui: &mut egui::Ui) {
+    let t = crate::theme::current();
+    ui.add_space(2.0);
+    ui.weak("Sensitivity: move right if hits are missed, left if it fires on the wrong things. Watch the bar: crossing the line is a hit. Works the same at any volume.");
+    egui::Grid::new("drum_sens").num_columns(3).spacing([8.0, 4.0]).show(ui, |ui| {
+        for (i, b) in AudioBand::DRUMS.iter().enumerate() {
+            ui.label(b.name());
+            ui.add(egui::Slider::new(&mut app.e.audio_settings.sensitivity[i], 0.3..=3.0).show_value(false));
+            let (rise, need) = app.e.onset[i];
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(120.0, 14.0), egui::Sense::hover());
+            let p = ui.painter();
+            p.rect_filled(r, 3.0, t.raised);
+            let frac = if need > 0.0 { (rise.max(0.0) / need / 1.5).clamp(0.0, 1.0) } else { 0.0 };
+            let lit = app.e.bands.get(*b) > 0.5;
+            let fill = if lit { t.accent } else { band_color(*b, 1.0) };
+            p.rect_filled(egui::Rect::from_min_size(r.min, egui::vec2(r.width() * frac, r.height())), 3.0, fill);
+            let x = r.min.x + r.width() / 1.5;
+            p.line_segment([egui::pos2(x, r.min.y - 2.0), egui::pos2(x, r.max.y + 2.0)], egui::Stroke::new(1.5, t.text));
+            resp.on_hover_text(format!("Rise {rise:.1} dB, needs {need:.1} dB"));
+            ui.end_row();
+        }
     });
 }

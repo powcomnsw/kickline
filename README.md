@@ -170,10 +170,11 @@ crash reports and (if you choose) your project. Nothing is uploaded.
 | Generators | Solid, Rainbow, Strobe, Chase, Plasma, Audio flash, Bands, Palette wash |
 | Effects | Brightness, Hue shift, Invert, Pulse, Audio brightness, Audio hue |
 | Colour palettes | Clips use palette colour 1–4 or a fixed colour; 8 palettes to start, editable; change on Bar / Beat / Kick / Snare / Hi-hat every N, with a crossfade |
+| Smooth output | ArtSync so every universe changes on the same frame, per-controller refresh cap for pixel controllers that glitch when fed too fast |
 | Art-Net nodes | Find nodes (ArtPoll) with one-click setup; live status per lumiverse, wrong-universe warnings, alert when a node drops out |
 | Advanced Output | Art-Net / sACN lumiverses with their own universe, IP and network port; drag / resize / rotate fixtures; snake and reverse wiring; universe spill; overlap warnings; array tool; RGBW white modes |
 | Fixtures | 1,781 built-in (QLC+), `.qxf` import, pixel-grid editor, colour order presets |
-| Audio | Live input or loopback, 5 bands + level, kick / snare / hi-hat detection, per-layer routing |
+| Audio | Live input or loopback, 5 bands + level, kick / snare / hi-hat detection that works at any volume and through loud, sidechained masters, sensitivity per drum with a live meter, per-layer routing |
 | rekordbox | Direct capture on macOS 14.2+, Ableton Link tempo and beat sync |
 | Timing | Engine on its own thread at a fixed DMX rate (44 Hz default); hits sent about 1 ms after detection |
 | Diagnostics | System, audio, network, Art-Net node discovery, project and performance checks; crash capture; exportable report |

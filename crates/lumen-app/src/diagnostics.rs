@@ -788,7 +788,16 @@ fn perf_checks(app: &View) -> Vec<Check> {
                     "Output",
                     "DMX out",
                     Status::Pass,
-                    format!("{} packets sent, no errors", s.packets),
+                    {
+                        let mut t = format!("{} packets sent, no errors", s.packets);
+                        if s.syncs > 0 {
+                            t += &format!(", {} ArtSync", s.syncs);
+                        }
+                        if s.reconnects > 0 {
+                            t += &format!(", recovered from {} network change(s)", s.reconnects);
+                        }
+                        t
+                    },
                 ));
             } else {
                 v.push(

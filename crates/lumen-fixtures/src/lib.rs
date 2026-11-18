@@ -302,6 +302,13 @@ pub struct Lumiverse {
     /// Network port to send through, by name ("en5"); None = let the computer choose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface: Option<String>,
+    /// Send ArtSync after each frame so all universes change together
+    /// (only when sending straight to a node, not by broadcast).
+    #[serde(default = "yes")]
+    pub sync: bool,
+    /// Cap the refresh rate for controllers that glitch when fed too fast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_hz: Option<u16>,
 }
 
 impl Lumiverse {
@@ -313,8 +320,14 @@ impl Lumiverse {
             universe,
             enabled: true,
             interface: None,
+            sync: true,
+            max_hz: None,
         }
     }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A fixture placed on the canvas. Coordinates are normalised (0..1).
