@@ -203,7 +203,7 @@ impl View<'_> {
         let tip = match state {
             Off => "DMX output is off. Click DMX OUT in the top bar to send to your lights.".to_string(),
             Idle => "Output is on, but no fixtures or universes are set up to send yet.".to_string(),
-            Live => "Packets are leaving for every universe.".to_string(),
+            Live => "Packets are leaving this computer for every universe. Art-Net doesn't confirm delivery: a green \"node answering\" next to this is the proof the controller is there (some cheap controllers never answer).".to_string(),
             Partial | Dead => {
                 let e = self.e.health.last_error.as_ref().map(|(_, e)| e.clone()).unwrap_or_default();
                 format!("{e}\nClick for Diagnostics.")

@@ -285,8 +285,8 @@ impl Engine {
                 // Only the swept lumiverse: one universe lit, the rest dark.
                 self.dmx.retain(|(lv, _), _| *lv != sw.lumiverse);
                 for k in 0..sw.count {
-                    let level = if k == on { sw.level } else { 0 };
-                    self.dmx.insert((sw.lumiverse, base + k), [level; UNIVERSE_SIZE]);
+                    let data = if k == on { sw.frame() } else { [0; UNIVERSE_SIZE] };
+                    self.dmx.insert((sw.lumiverse, base + k), data);
                 }
             }
         }
@@ -484,14 +484,31 @@ pub struct Sweep {
     pub started: Instant,
     /// Stay on this one (manual stepping) instead of moving on by itself.
     pub hold: Option<u16>,
+    /// Hold every channel on (true) or run a short chase across them (false).
+    pub all: bool,
 }
 
 impl Sweep {
     pub const STEP: f32 = 1.5;
 
     pub fn new(lumiverse: usize, count: u16) -> Self {
-        Sweep { lumiverse, count: count.max(1), level: 128, started: Instant::now(), hold: None }
+        Sweep { lumiverse, count: count.max(1), level: 128, started: Instant::now(), hold: None, all: false }
     }
+    /// The bytes for the lit universe. Chase: three channels at a time race
+    /// across the universe, so no channel is held at a value (some fixtures
+    /// treat a held value on a control channel as "reset" or "lamp off").
+    pub fn frame(&self) -> [u8; UNIVERSE_SIZE] {
+        if self.all {
+            return [self.level; UNIVERSE_SIZE];
+        }
+        let mut u = [0u8; UNIVERSE_SIZE];
+        let pos = ((self.started.elapsed().as_secs_f32() / 0.75).fract() * (UNIVERSE_SIZE - 3) as f32) as usize;
+        for b in &mut u[pos..pos + 3] {
+            *b = 255;
+        }
+        u
+    }
+
     /// Offset (0-based) of the universe that's lit right now.
     pub fn current(&self) -> u16 {
         match self.hold {
@@ -636,6 +653,15 @@ fn run(engine: Arc<Mutex<Engine>>) {
 #[cfg(test)]
 mod health_tests {
     use super::*;
+
+    #[test]
+    fn sweep_chase_never_holds_more_than_three_channels() {
+        let sw = Sweep::new(0, 4);
+        let f = sw.frame();
+        assert_eq!(f.iter().filter(|&&b| b > 0).count(), 3);
+        let all = Sweep { all: true, ..sw };
+        assert!(all.frame().iter().all(|&b| b == 128));
+    }
 
     #[test]
     fn ranges() {

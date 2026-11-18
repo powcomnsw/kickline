@@ -201,7 +201,7 @@ fn sweep_panel(o: &AdvancedOutput, lv: usize, sweep: &mut Option<crate::engine::
         ui.horizontal(|ui| {
             if ui
                 .button("Sweep universes")
-                .on_hover_text("Check the cable, controller and lights before adding fixtures: lights every channel of one universe at a time (half brightness), moving on every 1.5 s. Everything else on this lumiverse is dark while it runs.")
+                .on_hover_text("Check the cable, controller and lights before adding fixtures: a short chase runs across one universe at a time, moving on every 1.5 s. Whatever flickers is listening to that universe. Everything else on this lumiverse is dark while it runs.")
                 .clicked()
             {
                 *sweep = Some(crate::engine::Sweep::new(lv, *count));
@@ -221,7 +221,11 @@ fn sweep_panel(o: &AdvancedOutput, lv: usize, sweep: &mut Option<crate::engine::
         ui.label(egui::RichText::new(format!("Universe {u} is on now ({} of {})", cur + 1, sw.count)).font(crate::theme::bold(t.text_size + 1.0)));
         ui.weak(format!("Art-Net {} · sACN {}", artnet_address(u), u + 1));
         ui.weak("Whatever lights up is listening to this universe. Nothing at all? Check the IP, network port and that the controller is in Art-Net/sACN mode. Lights up one step late or early? The controller counts universes from 1: change Universe above.");
-        ui.label(egui::RichText::new("Moving heads and strobes will move or flash during the sweep.").color(t.warn));
+        ui.label(egui::RichText::new(if sw.all {
+            "All channels are held on: moving heads and smart fixtures may move, strobe or react to control channels. Use the chase for those."
+        } else {
+            "A short chase runs across the universe: pixels show a running dot (and which way the data goes); moving heads may twitch."
+        }).color(t.warn));
         ui.horizontal(|ui| {
             if ui.button("◀").clicked() {
                 sw.hold = Some((cur + sw.count - 1) % sw.count);
@@ -237,10 +241,8 @@ fn sweep_panel(o: &AdvancedOutput, lv: usize, sweep: &mut Option<crate::engine::
             } else if ui.button("Hold").on_hover_text("Stay on this universe").clicked() {
                 sw.hold = Some(cur);
             }
-            let mut full = sw.level == 255;
-            if ui.checkbox(&mut full, "Full brightness").changed() {
-                sw.level = if full { 255 } else { 128 };
-            }
+            ui.selectable_value(&mut sw.all, false, "Chase").on_hover_text("Safe for any fixture: no channel is held on");
+            ui.selectable_value(&mut sw.all, true, "All channels").on_hover_text("Every channel at half: easiest to see on pixels and pars, but avoid with moving heads");
         });
         if ui.add(egui::Button::new(egui::RichText::new("Stop sweep").color(t.on_accent)).fill(t.accent)).clicked() {
             stop = true;
