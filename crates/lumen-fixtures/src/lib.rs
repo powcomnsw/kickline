@@ -684,6 +684,23 @@ impl AdvancedOutput {
         }
     }
 
+    /// Absolute universes this lumiverse sends (its base universe if empty).
+    pub fn universes_used(&self, lumiverse: usize) -> Vec<u16> {
+        let Some(l) = self.lumiverses.get(lumiverse) else { return Vec::new() };
+        let mut out: Vec<u16> = self
+            .fixtures
+            .iter()
+            .filter(|f| f.lumiverse == lumiverse)
+            .flat_map(|f| self.layout(f).into_iter().map(|s| l.universe + s.universe_offset))
+            .collect();
+        if out.is_empty() {
+            out.push(l.universe);
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// Could two lumiverses' packets land on the same device? Same protocol and
     /// either sACN (universes are network-wide), the same target, or a broadcast.
     pub fn same_wire(&self, a: usize, b: usize) -> bool {

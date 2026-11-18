@@ -2,7 +2,7 @@
 
 pub mod discovery;
 pub mod net;
-pub use discovery::{discover, explain_send_error, ArtNode};
+pub use discovery::{discover, explain_send_error, ArtNode, NodeWatcher, SeenNode};
 pub use net::{interfaces, NetIface};
 
 use std::io;

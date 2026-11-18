@@ -3,6 +3,8 @@
 use socket2::{Domain, Protocol as SockProto, Socket, Type};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::ARTNET_PORT;
@@ -83,9 +85,7 @@ pub fn discover(broadcasts: &[Ipv4Addr], wait: Duration) -> io::Result<Vec<ArtNo
         match sock.recv_from(&mut buf) {
             Ok((n, _)) => {
                 if let Some(node) = parse_artpoll_reply(&buf[..n]) {
-                    if !nodes.iter().any(|x| x.ip == node.ip && x.short_name == node.short_name) {
-                        nodes.push(node);
-                    }
+                    merge_node(&mut nodes, node);
                 }
             }
             Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
@@ -93,6 +93,210 @@ pub fn discover(broadcasts: &[Ipv4Addr], wait: Duration) -> io::Result<Vec<ArtNo
         }
     }
     Ok(nodes)
+}
+
+/// Nodes with more than 4 outputs answer once per group of 4 ("bind index"),
+/// all from the same IP. Fold those into one node with every universe.
+pub fn merge_node(nodes: &mut Vec<ArtNode>, node: ArtNode) -> usize {
+    if let Some(i) = nodes.iter().position(|x| x.ip == node.ip) {
+        let x = &mut nodes[i];
+        for u in node.universes {
+            if !x.universes.contains(&u) {
+                x.universes.push(u);
+            }
+        }
+        x.universes.sort_unstable();
+        if x.long_name.is_empty() {
+            x.long_name = node.long_name;
+        }
+        i
+    } else {
+        nodes.push(node);
+        nodes.len() - 1
+    }
+}
+
+// ------------------------------------------------------------ live watching
+
+/// How often a controller polls (Art-Net asks for 2.5–3 s).
+pub const POLL_EVERY: Duration = Duration::from_secs(3);
+/// A node that hasn't answered for this long counts as gone.
+pub const ONLINE_FOR: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Debug)]
+pub struct SeenNode {
+    pub node: ArtNode,
+    /// Network port the node is reachable through, if one's subnet contains it.
+    pub port: Option<String>,
+    pub last_seen: Instant,
+}
+
+impl SeenNode {
+    pub fn online(&self) -> bool {
+        self.last_seen.elapsed() < ONLINE_FOR
+    }
+    pub fn name(&self) -> &str {
+        if self.node.long_name.is_empty() {
+            &self.node.short_name
+        } else {
+            &self.node.long_name
+        }
+    }
+}
+
+#[derive(Default)]
+struct Watch {
+    nodes: Vec<SeenNode>,
+    error: Option<String>,
+    polls: u64,
+}
+
+/// Polls for Art-Net nodes in the background every few seconds while active,
+/// and remembers every node it has heard from. Cheap to clone.
+#[derive(Clone)]
+pub struct NodeWatcher {
+    inner: Arc<Mutex<Watch>>,
+    active: Arc<AtomicBool>,
+    poll_now: Arc<AtomicBool>,
+}
+
+impl Default for NodeWatcher {
+    fn default() -> Self {
+        Self::start()
+    }
+}
+
+impl NodeWatcher {
+    pub fn start() -> Self {
+        let w = NodeWatcher {
+            inner: Arc::default(),
+            active: Arc::new(AtomicBool::new(false)),
+            poll_now: Arc::new(AtomicBool::new(false)),
+        };
+        let t = w.clone();
+        let _ = std::thread::Builder::new().name("artpoll".into()).spawn(move || t.run());
+        w
+    }
+
+    /// Poll only while something needs it (output on, or the patch is open).
+    pub fn set_active(&self, on: bool) {
+        if on && !self.active.swap(true, Ordering::Relaxed) {
+            self.poll_now.store(true, Ordering::Relaxed);
+        } else if !on {
+            self.active.store(false, Ordering::Relaxed);
+        }
+    }
+
+    pub fn poll_now(&self) {
+        self.poll_now.store(true, Ordering::Relaxed);
+    }
+
+    pub fn nodes(&self) -> Vec<SeenNode> {
+        self.inner.lock().map(|w| w.nodes.clone()).unwrap_or_default()
+    }
+
+    pub fn error(&self) -> Option<String> {
+        self.inner.lock().ok().and_then(|w| w.error.clone())
+    }
+
+    /// Number of polls sent so far (lets callers wait for a fresh round).
+    pub fn polls(&self) -> u64 {
+        self.inner.lock().map(|w| w.polls).unwrap_or(0)
+    }
+
+    /// Feed a reply in directly (used by tests and by the probe).
+    pub fn record(&self, node: ArtNode, ports: &[crate::NetIface]) {
+        let port = ports.iter().find(|p| p.contains(node.ip)).map(|p| p.name.clone());
+        if let Ok(mut w) = self.inner.lock() {
+            let mut plain: Vec<ArtNode> = w.nodes.iter().map(|n| n.node.clone()).collect();
+            let i = merge_node(&mut plain, node);
+            if i < w.nodes.len() {
+                w.nodes[i].node = plain[i].clone();
+                w.nodes[i].last_seen = Instant::now();
+                if port.is_some() {
+                    w.nodes[i].port = port;
+                }
+            } else {
+                w.nodes.push(SeenNode { node: plain[i].clone(), port, last_seen: Instant::now() });
+            }
+            w.nodes.sort_by_key(|n| n.node.ip);
+        }
+    }
+
+    fn set_error(&self, e: Option<String>) {
+        if let Ok(mut w) = self.inner.lock() {
+            w.error = e;
+        }
+    }
+
+    fn run(self) {
+        let mut sock: Option<UdpSocket> = None;
+        let mut last_poll: Option<Instant> = None;
+        // After any poll, keep reading replies for a while even if inactive.
+        let mut listen_until = Instant::now();
+        let mut last_bind_try: Option<Instant> = None;
+        let mut ports = crate::net::interfaces();
+        let mut buf = [0u8; 1024];
+        loop {
+            let active = self.active.load(Ordering::Relaxed);
+            if !active && !self.poll_now.load(Ordering::Relaxed) && Instant::now() >= listen_until {
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
+            }
+            if sock.is_none() && last_bind_try.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
+                last_bind_try = Some(Instant::now());
+                match bind_artnet_port().and_then(|s| s.set_read_timeout(Some(Duration::from_millis(100))).map(|_| s)) {
+                    Ok(s) => {
+                        sock = Some(s);
+                        self.set_error(None);
+                    }
+                    Err(e) => self.set_error(Some(format!("{e}. {}", explain_send_error(&e)))),
+                }
+            }
+            let Some(s) = sock.as_ref() else {
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
+            };
+            let due = last_poll.is_none_or(|t| t.elapsed() >= POLL_EVERY);
+            if self.poll_now.swap(false, Ordering::Relaxed) || (active && due) {
+                ports = crate::net::interfaces();
+                let poll = artpoll_packet();
+                let mut targets = vec![Ipv4Addr::BROADCAST];
+                targets.extend(ports.iter().map(|p| p.broadcast));
+                targets.dedup();
+                let mut errors = Vec::new();
+                for t in &targets {
+                    if let Err(e) = s.send_to(&poll, SocketAddr::from((*t, ARTNET_PORT))) {
+                        errors.push(e);
+                    }
+                }
+                self.set_error(if errors.len() == targets.len() {
+                    errors.first().map(|e| format!("{e}. {}", explain_send_error(e)))
+                } else {
+                    None
+                });
+                if let Ok(mut w) = self.inner.lock() {
+                    w.polls += 1;
+                    // Forget nodes not heard from for 10 minutes.
+                    w.nodes.retain(|n| n.last_seen.elapsed() < Duration::from_secs(600));
+                }
+                last_poll = Some(Instant::now());
+                listen_until = Instant::now() + POLL_EVERY;
+            }
+            match s.recv_from(&mut buf) {
+                Ok((n, _)) => {
+                    if let Some(node) = parse_artpoll_reply(&buf[..n]) {
+                        self.record(node, &ports);
+                    }
+                }
+                Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
+                Err(e) => {
+                    self.set_error(Some(format!("{e}. {}", explain_send_error(&e))));
+                    sock = None;
+                }
+            }
+        }
+    }
 }
 
 /// Plain-language hint for a socket error, with the macOS gotchas first.
@@ -153,6 +357,31 @@ mod tests {
         assert_eq!(n.universes, vec![16, 19]);
         assert_eq!(n.mac, Some([0, 1, 2, 3, 4, 5]));
         assert!(parse_artpoll_reply(&fake_reply()[..100]).is_none());
+    }
+
+    #[test]
+    fn multi_bind_replies_merge() {
+        let mut a = parse_artpoll_reply(&fake_reply()).unwrap();
+        let mut nodes = Vec::new();
+        merge_node(&mut nodes, a.clone());
+        a.universes = vec![20, 21, 22, 23];
+        merge_node(&mut nodes, a);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].universes, vec![16, 19, 20, 21, 22, 23]);
+    }
+
+    #[test]
+    fn watcher_tracks_nodes_and_port() {
+        let w = NodeWatcher { inner: Arc::default(), active: Arc::new(AtomicBool::new(false)), poll_now: Arc::new(AtomicBool::new(false)) };
+        let port = crate::NetIface { name: "en5".into(), ip: Ipv4Addr::new(2, 0, 0, 100), netmask: Ipv4Addr::new(255, 0, 0, 0), broadcast: Ipv4Addr::new(2, 255, 255, 255), index: None };
+        let n = parse_artpoll_reply(&fake_reply()).unwrap();
+        w.record(n.clone(), &[port.clone()]);
+        w.record(n, &[port]);
+        let seen = w.nodes();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].port.as_deref(), Some("en5"));
+        assert!(seen[0].online());
+        assert_eq!(seen[0].name(), "PixLite 16 MkII");
     }
 
     #[test]

@@ -7,7 +7,7 @@ use crate::log::{self, Level};
 use crate::{paths, View};
 use eframe::egui::{self, Color32, RichText};
 use lumen_fixtures::{AdvancedOutput, Protocol};
-use lumen_output::{discover, explain_send_error, ArtNode};
+use lumen_output::{explain_send_error, ArtNode};
 use serde::Serialize;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::PathBuf;
@@ -822,6 +822,7 @@ fn perf_checks(app: &View) -> Vec<Check> {
 fn network_checks(
     lumiverses: Vec<lumen_fixtures::Lumiverse>,
     used: Vec<(usize, u16)>,
+    watcher: lumen_output::NodeWatcher,
 ) -> NetResult {
     let mut v = Vec::new();
     let ifaces: Vec<(String, Ipv4Addr, Ipv4Addr, Option<Ipv4Addr>)> = if_addrs::get_if_addrs()
@@ -962,7 +963,17 @@ fn network_checks(
 
     let mut targets = vec![Ipv4Addr::BROADCAST];
     targets.extend(bcasts.iter().copied());
-    let nodes = match discover(&targets, Duration::from_secs(2)) {
+    // Ask the background watcher for a fresh round instead of opening a second
+    // Art-Net socket (two sockets on port 6454 split the replies between them).
+    let _ = &targets;
+    let before = std::time::Instant::now();
+    watcher.poll_now();
+    std::thread::sleep(Duration::from_secs(2));
+    let polled: Result<Vec<ArtNode>, std::io::Error> = match watcher.error() {
+        Some(e) if watcher.nodes().is_empty() => Err(std::io::Error::other(e)),
+        _ => Ok(watcher.nodes().into_iter().filter(|n| n.last_seen >= before).map(|n| n.node).collect()),
+    };
+    let nodes = match polled {
         Ok(nodes) => {
             if nodes.is_empty() {
                 v.push(check("Network", "Art-Net nodes", Status::Warn, "no node answered an ArtPoll").hint(
@@ -1040,8 +1051,9 @@ pub fn run_probe(app: &mut View) {
     let (tx, rx) = channel();
     let lv = app.e.output.lumiverses.clone();
     let used: Vec<(usize, u16)> = app.e.dmx.keys().copied().collect();
+    let watcher = app.nodes.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(network_checks(lv, used));
+        let _ = tx.send(network_checks(lv, used, watcher));
     });
     app.diag.rx = Some(rx);
 }
@@ -1161,7 +1173,7 @@ pub fn export(app: &mut View) -> Result<PathBuf, String> {
         project,
     };
     let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
-    let path = paths::reports_dir().join(format!("lumen-report-{stamp}.json"));
+    let path = paths::reports_dir().join(format!("kickline-report-{stamp}.json"));
     std::fs::write(&path, json).map_err(|e| format!("{}: {e}", path.display()))?;
     log::info(
         "diagnostics",

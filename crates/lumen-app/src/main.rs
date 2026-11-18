@@ -52,6 +52,8 @@ pub struct LumenApp {
     pub ao: advanced_output::State,
     pub fe: fixture_editor::State,
     pub dmx_view: dmx_monitor::State,
+    /// Art-Net nodes heard on the network (polled in the background).
+    pub nodes: lumen_output::NodeWatcher,
 }
 
 /// What every UI function gets: the locked engine (`app.e`) plus UI state
@@ -101,6 +103,7 @@ impl LumenApp {
             ao: Default::default(),
             fe: Default::default(),
             dmx_view: Default::default(),
+            nodes: lumen_output::NodeWatcher::start(),
         }
     }
 }
@@ -233,6 +236,26 @@ impl View<'_> {
             let (dot, txt) = if self.e.output_enabled { (t.ok, self.e.status.clone()) } else { (t.weak, "DMX output off".into()) };
             ui.colored_label(dot, "●");
             ui.label(egui::RichText::new(txt).color(t.weak));
+            if self.e.output_enabled {
+                let seen = self.nodes.nodes();
+                let mut lost = Vec::new();
+                let mut online = 0;
+                for i in 0..self.e.output.lumiverses.len() {
+                    match advanced_output::node_status(&self.e.output, i, &seen) {
+                        advanced_output::NodeStatus::Lost { name, .. } => lost.push(format!("{} ({name})", self.e.output.lumiverses[i].name)),
+                        advanced_output::NodeStatus::Online(_) => online += 1,
+                        _ => {}
+                    }
+                }
+                ui.separator();
+                if !lost.is_empty() {
+                    ui.colored_label(t.err, format!("Node not answering: {}", lost.join(", ")))
+                        .on_hover_text("Kickline keeps sending. Check the node's power and cable.");
+                } else if online > 0 {
+                    let n = seen.iter().filter(|n| n.online()).count();
+                    ui.colored_label(t.ok, format!("{n} node(s) answering"));
+                }
+            }
             ui.separator();
             ui.label(egui::RichText::new(format!("Audio: {}", self.e.audio.label())).color(t.weak));
             util::hit_dots(ui, &self.e.bands);
@@ -320,6 +343,8 @@ impl eframe::App for LumenApp {
             }
         }
 
+        // Poll for nodes while output is on or the patch is open.
+        v.s.nodes.set_active(v.e.output_enabled || v.s.windows.advanced_output);
         let was_open = [v.windows.advanced_output, v.windows.fixture_editor, v.windows.dmx_monitor, v.windows.audio, v.windows.diagnostics];
         egui::Panel::top("top").show(ui, |ui| v.top_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| v.status_bar(ui));

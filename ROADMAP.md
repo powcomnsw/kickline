@@ -67,7 +67,8 @@ Key decisions:
 ### M5 — Performance and polish
 - [ ] wgpu compositor for large canvases
 - [x] Output thread decoupled from UI (fixed-rate DMX, instant send on hits)
-- [ ] Art-Net node discovery (ArtPoll), sACN priority and merge, DDP, serial DMX / USB adapters
+- [x] Art-Net node discovery (ArtPoll): Find nodes with one-click setup, live node status per lumiverse
+- [ ] sACN priority and merge, DDP, serial DMX / USB adapters
 - [ ] Plugin API for generators and effects
 - [x] Diagnostics probe, crash capture and exportable report
 - [x] macOS .app/.dmg build script + CI workflow (needs first run on a real Mac)

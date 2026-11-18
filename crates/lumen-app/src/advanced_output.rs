@@ -5,6 +5,7 @@ use crate::util::{paint_frame, to_canvas, to_color, to_screen};
 use crate::View;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use lumen_fixtures::{AdvancedOutput, Fixture, Lumiverse, Protocol};
+use lumen_output::SeenNode;
 
 #[derive(Default)]
 pub struct State {
@@ -18,6 +19,7 @@ pub struct State {
     /// Network ports, refreshed every few seconds.
     ports: Vec<lumen_output::NetIface>,
     ports_at: Option<std::time::Instant>,
+    find_nodes: bool,
 }
 
 struct ArrayForm {
@@ -54,15 +56,157 @@ fn handles(fx: &Fixture, aspect: f32, rect: Rect) -> (Pos2, Pos2) {
     (resize, rotate)
 }
 
-fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_output::RouteState], ui: &mut egui::Ui) {
+/// What we know about the node(s) behind a lumiverse, from ArtPoll replies.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NodeStatus {
+    /// sACN or disabled: ArtPoll doesn't apply.
+    NotArtNet,
+    /// No node has answered for this lumiverse (yet).
+    Waiting,
+    Online(String),
+    /// The node answers but doesn't output some of the universes we send.
+    Missing { name: String, missing: Vec<u16>, has: Vec<u16> },
+    /// The node was answering and has stopped.
+    Lost { name: String, secs: u64 },
+}
+
+impl NodeStatus {
+    pub fn color(&self, t: &crate::theme::Theme) -> Color32 {
+        match self {
+            NodeStatus::Online(_) => t.ok,
+            NodeStatus::Missing { .. } => t.warn,
+            NodeStatus::Lost { .. } => t.err,
+            _ => t.line,
+        }
+    }
+
+    pub fn describe(&self) -> String {
+        let list = |v: &[u16]| v.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(", ");
+        match self {
+            NodeStatus::NotArtNet => String::new(),
+            NodeStatus::Waiting => "No node has answered yet. Some nodes don't reply to ArtPoll; output is sent anyway.".into(),
+            NodeStatus::Online(n) => format!("{n} is answering"),
+            NodeStatus::Missing { name, missing, has } => format!(
+                "{name} answers, but it outputs universe {} and you send {}. Some nodes count universes from 1, Kickline counts from 0.",
+                list(has),
+                list(missing)
+            ),
+            NodeStatus::Lost { name, secs } => format!("{name} stopped answering {secs} s ago. Kickline keeps sending."),
+        }
+    }
+}
+
+fn is_broadcast(target: &str) -> bool {
+    target.trim().ends_with(".255")
+}
+
+pub fn node_status(o: &AdvancedOutput, lv: usize, nodes: &[SeenNode]) -> NodeStatus {
+    let Some(l) = o.lumiverses.get(lv) else { return NodeStatus::NotArtNet };
+    if l.protocol != Protocol::ArtNet || !l.enabled {
+        return NodeStatus::NotArtNet;
+    }
+    let used = o.universes_used(lv);
+    let pick = |cands: Vec<&SeenNode>| -> NodeStatus {
+        if let Some(n) = cands.iter().find(|n| n.online()) {
+            let names: Vec<&str> = cands.iter().filter(|n| n.online()).map(|n| n.name()).collect();
+            let missing: Vec<u16> = used.iter().copied().filter(|u| !cands.iter().filter(|n| n.online()).any(|n| n.node.universes.contains(u))).collect();
+            if !missing.is_empty() && !n.node.universes.is_empty() && !is_broadcast(&l.target) {
+                return NodeStatus::Missing { name: n.name().to_string(), missing, has: n.node.universes.clone() };
+            }
+            return NodeStatus::Online(names.join(", "));
+        }
+        match cands.iter().max_by_key(|n| n.last_seen) {
+            Some(n) => NodeStatus::Lost { name: n.name().to_string(), secs: n.last_seen.elapsed().as_secs() },
+            None => NodeStatus::Waiting,
+        }
+    };
+    if is_broadcast(&l.target) {
+        pick(nodes.iter().filter(|n| n.node.universes.iter().any(|u| used.contains(u))).collect())
+    } else {
+        let ip = l.target.trim();
+        pick(nodes.iter().filter(|n| n.node.ip.to_string() == ip).collect())
+    }
+}
+
+/// The "Find nodes" list: every node that answered, with one-click setup.
+fn nodes_list(o: &mut AdvancedOutput, st: &mut State, nodes: &[SeenNode], watcher: &lumen_output::NodeWatcher, ui: &mut egui::Ui) {
+    let t = crate::theme::current();
+    egui::Frame::new().fill(t.panel).corner_radius(t.radius).inner_margin(8).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Nodes on the network").font(crate::theme::bold(t.text_size)));
+            if ui.small_button("Search again").clicked() {
+                watcher.poll_now();
+            }
+        });
+        if let Some(e) = watcher.error() {
+            ui.colored_label(t.warn, e);
+        }
+        if nodes.is_empty() {
+            ui.weak("Listening for Art-Net nodes… If nothing appears: check the node is powered and cabled, and that this computer has an IP on the node's network (often 2.x.x.x or 192.168.x.x).");
+        }
+        let target_lv = st.lumiverse;
+        let lv_name = o.lumiverses.get(target_lv).map(|l| l.name.clone()).unwrap_or_default();
+        for n in nodes {
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.colored_label(if n.online() { t.ok } else { t.err }, "●");
+                ui.label(egui::RichText::new(n.name()).font(crate::theme::bold(t.text_size)));
+            });
+            let unis = if n.node.universes.is_empty() { "no outputs reported".to_string() } else { format!("universe {}", n.node.universes.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(", ")) };
+            let port = n.port.as_deref().map(|p| format!(" · via {p}")).unwrap_or_default();
+            let ago = if n.online() { String::new() } else { format!(" · last heard {} s ago", n.last_seen.elapsed().as_secs()) };
+            ui.weak(format!("{} · {unis}{port}{ago}", n.node.ip));
+            ui.horizontal(|ui| {
+                let first = n.node.universes.first().copied();
+                if ui.small_button(format!("Use for {lv_name}")).on_hover_text("Send this lumiverse straight to this node, on its first universe and network port").clicked() {
+                    if let Some(l) = o.lumiverses.get_mut(target_lv) {
+                        l.protocol = Protocol::ArtNet;
+                        l.target = n.node.ip.to_string();
+                        if let Some(u) = first {
+                            l.universe = u;
+                        }
+                        if n.port.is_some() {
+                            l.interface = n.port.clone();
+                        }
+                    }
+                }
+                if ui.small_button("New lumiverse").clicked() {
+                    let mut l = Lumiverse::new(n.name(), first.unwrap_or(0));
+                    l.target = n.node.ip.to_string();
+                    l.interface = n.port.clone();
+                    o.lumiverses.push(l);
+                    st.lumiverse = o.lumiverses.len() - 1;
+                }
+            });
+        }
+    });
+}
+
+fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_output::RouteState], nodes: &[SeenNode], watcher: &lumen_output::NodeWatcher, ui: &mut egui::Ui) {
     if st.ports_at.is_none_or(|t| t.elapsed().as_secs() >= 3) {
         st.ports = lumen_output::interfaces();
         st.ports_at = Some(std::time::Instant::now());
     }
-    ui.heading("Lumiverses");
+    let t = crate::theme::current();
+    ui.horizontal(|ui| {
+        ui.heading("Lumiverses");
+        if ui.add(egui::Button::new("Find nodes").selected(st.find_nodes)).on_hover_text("List the Art-Net nodes on your network").clicked() {
+            st.find_nodes = !st.find_nodes;
+            watcher.poll_now();
+        }
+    });
+    if st.find_nodes {
+        nodes_list(o, st, nodes, watcher, ui);
+        ui.add_space(4.0);
+    }
+    let statuses: Vec<NodeStatus> = (0..o.lumiverses.len()).map(|i| node_status(o, i, nodes)).collect();
     let mut remove = None;
     for (i, l) in o.lumiverses.iter().enumerate() {
         ui.horizontal(|ui| {
+            let ns = &statuses[i];
+            if *ns != NodeStatus::NotArtNet {
+                ui.colored_label(ns.color(&t), "●").on_hover_text(ns.describe());
+            }
             let used = o.fixtures.iter().filter(|f| f.lumiverse == i).count();
             let text = format!("{}  ·  U{}  ·  {}", l.name, l.universe, l.protocol.name());
             if ui
@@ -136,7 +280,15 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_outpu
                 ui.checkbox(&mut l.enabled, "");
                 ui.end_row();
             });
-        let t = crate::theme::current();
+        match &statuses[st.lumiverse] {
+            NodeStatus::NotArtNet => {}
+            NodeStatus::Waiting => {
+                ui.weak(statuses[st.lumiverse].describe());
+            }
+            ns => {
+                ui.colored_label(ns.color(&t), ns.describe());
+            }
+        }
         match routes.get(st.lumiverse) {
             Some(lumen_output::RouteState::Up(i)) => {
                 ui.colored_label(t.ok, format!("Sending through {} ({})", i.name, i.ip));
@@ -444,13 +596,15 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
     let View { e, s } = app;
     let (output, frame, st, routes) = (&mut e.output, &e.frame, &mut s.ao, &e.routes);
     let (windows, fe) = (&mut s.windows, &mut s.fe);
+    let watcher = s.nodes.clone();
+    let nodes = watcher.nodes();
     let mut edit_type = None;
     let aspect = output.aspect;
     egui::Panel::left("ao_left")
         .default_size(290.0)
         .resizable(true)
         .show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| lumiverse_panel(output, st, routes, ui));
+            egui::ScrollArea::vertical().show(ui, |ui| lumiverse_panel(output, st, routes, &nodes, &watcher, ui));
         });
 
     egui::CentralPanel::default().show(ui, |ui| {
@@ -618,5 +772,44 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
         windows.fixture_editor = true;
         fe.selected = t;
         fe.browsing = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lumen_output::ArtNode;
+    use std::time::{Duration, Instant};
+
+    fn seen(ip: [u8; 4], unis: &[u16], ago: u64) -> SeenNode {
+        SeenNode {
+            node: ArtNode { ip: ip.into(), short_name: "Pix".into(), long_name: "PixLite".into(), universes: unis.to_vec(), mac: None },
+            port: Some("en5".into()),
+            last_seen: Instant::now() - Duration::from_secs(ago),
+        }
+    }
+
+    #[test]
+    fn node_status_rules() {
+        let mut o = AdvancedOutput::demo();
+        let lv = 0;
+        o.lumiverses[lv].target = "2.0.0.50".into();
+        let used = o.universes_used(lv);
+        // Nobody answered yet.
+        assert_eq!(node_status(&o, lv, &[]), NodeStatus::Waiting);
+        // Right node, right universes.
+        assert_eq!(node_status(&o, lv, &[seen([2, 0, 0, 50], &used, 0)]), NodeStatus::Online("PixLite".into()));
+        // Node counts from 1: everything shifted.
+        let shifted: Vec<u16> = used.iter().map(|u| u + 1).collect();
+        assert!(matches!(node_status(&o, lv, &[seen([2, 0, 0, 50], &shifted, 0)]), NodeStatus::Missing { .. }));
+        // Went quiet.
+        assert!(matches!(node_status(&o, lv, &[seen([2, 0, 0, 50], &used, 30)]), NodeStatus::Lost { secs: 30, .. }));
+        // Broadcast: matched by universe, not IP.
+        o.lumiverses[lv].target = "255.255.255.255".into();
+        assert_eq!(node_status(&o, lv, &[seen([2, 0, 0, 77], &used, 0)]), NodeStatus::Online("PixLite".into()));
+        assert_eq!(node_status(&o, lv, &[seen([2, 0, 0, 77], &[99], 0)]), NodeStatus::Waiting);
+        // sACN: not applicable.
+        o.lumiverses[lv].protocol = Protocol::Sacn;
+        assert_eq!(node_status(&o, lv, &[]), NodeStatus::NotArtNet);
     }
 }
