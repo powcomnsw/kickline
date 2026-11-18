@@ -14,6 +14,7 @@
   <b><a href="https://github.com/powcomnsw/lumen/releases/latest">Download for Mac</a></b>
   &nbsp;·&nbsp; <a href="#quick-start">Quick start</a>
   &nbsp;·&nbsp; <a href="#features">Features</a>
+  &nbsp;·&nbsp; <a href="#saving-your-show">Saving</a>
   &nbsp;·&nbsp; <a href="ROADMAP.md">Roadmap</a>
   &nbsp;·&nbsp; <a href="#reporting-problems">Report a problem</a>
 </p>
@@ -92,6 +93,28 @@ rig.
 3. **Sound.** Open **Audio** and click **Use rekordbox (direct)**. With no music
    playing, **Demo beat** works too.
 4. **Play.** Click clips and palettes. Your show **saves by itself**, and **⌘Z** undoes anything.
+
+## Saving your show
+
+Everything is one **show file**: the clips on every layer, palettes, your
+lumiverses (IP, universe, network port), every fixture and where it sits on the
+canvas, fixture types, and the audio routing.
+
+- **It saves by itself**, two seconds after any change and again when you quit.
+  The show name at the top right shows **✓** when everything is saved, **•**
+  while saving and **⚠** if saving failed (click it to see why).
+- **Next week, just open Kickline.** It reopens the show you had open last.
+- **The show menu** (click the show name, top right):
+  - **New show**: a fresh show with the demo clips and an empty patch, then the setup guide.
+  - **Open…**: pick another show file.
+  - **Save as…**: save a copy under a new name (e.g. one per venue) and keep working in the copy.
+  - **Save now** (⌘S).
+- **Undo / redo:** ⌘Z and ⌘⇧Z, or the ↶ ↷ buttons. Moving a fixture or deleting
+  a clip can be undone; launching clips during a set never fills the undo list.
+
+Shows live in `~/Documents/Kickline` as `.json` files, so they're easy to back
+up, copy to another Mac, or send with a problem report. A show saved by an older
+version opens in a newer one.
 
 <details>
 <summary><b>Other ways to get rekordbox audio in</b></summary>
