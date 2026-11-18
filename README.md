@@ -65,7 +65,7 @@ rig.
 </td>
 <td valign="top">
 <h3>Safe for live shows</h3>
-<p>DMX runs on its own high-priority thread at a fixed rate, even when the window is hidden. Pin each lumiverse to a network port: pull the adapter out mid-set, plug it back in, and output <b>resumes by itself</b>.</p>
+<p>DMX runs on its own high-priority thread at a fixed rate, even when the window is hidden. <b>Find nodes</b> lists every Art-Net node and sets a lumiverse up in one click, and a dot per lumiverse turns red if a node stops answering mid-set. Pin each lumiverse to a network port: pull the adapter out, plug it back in, and output <b>resumes by itself</b>.</p>
 </td>
 </tr>
 </table>
