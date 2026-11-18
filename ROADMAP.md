@@ -92,6 +92,10 @@ Key decisions:
 - [x] Reverse, mirror (from the middle), ripple across strips; palette colours; audio triggers
 - [ ] Strip effects in Advanced Output's "Show pixel colours"
 
+## Next: decluttered screens (agreed, not built)
+
+- [ ] Play / Set up modes with an inspector panel: see [docs/design/ui-redesign.md](docs/design/ui-redesign.md)
+
 ## Known limitations of v0.6
 - Imported moving heads light up but don't move yet: pan/tilt are held centred.
 - Drum detection is tuned for four-on-the-floor dance music; use the Tuning sliders for other styles.
