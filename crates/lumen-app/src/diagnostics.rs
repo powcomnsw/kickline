@@ -1134,7 +1134,7 @@ pub fn export(app: &mut View) -> Result<PathBuf, String> {
     let (iso, stamp) = paths::timestamp();
     let (pass, warn, fail) = app.diag.summary_counts();
     let project = if app.diag.include_project {
-        let p = crate::Project {
+        let p = crate::project::Project {
             composition: app.e.comp.clone(),
             output: app.e.output.clone(),
         };

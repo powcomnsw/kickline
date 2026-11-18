@@ -12,7 +12,7 @@ use crate::diagnostics::Metrics;
 use crate::link::{LinkStatus, LinkSync};
 use crate::log;
 use lumen_audio::{Analyzer, AudioFeed, DemoBeat, Settings, Wake};
-use lumen_core::{AudioBands, Composition, Frame};
+use lumen_core::{AudioBands, Composition, Frame, Rgba};
 use lumen_fixtures::{AdvancedOutput, UNIVERSE_SIZE};
 use lumen_output::{SendStats, Sender};
 use std::collections::BTreeMap;
@@ -88,6 +88,9 @@ pub struct Engine {
     last_send: Instant,
     last_hit_seen: Option<Instant>,
     pub shutdown: bool,
+    /// Fixture test in progress: everything else dark, this fixture cycles
+    /// red, green, blue, white, then a dot running from its first pixel.
+    pub test: Option<FixtureTest>,
 }
 
 impl Engine {
@@ -115,6 +118,7 @@ impl Engine {
             last_send: Instant::now(),
             last_hit_seen: None,
             shutdown: false,
+            test: None,
         }
     }
 
@@ -226,7 +230,34 @@ impl Engine {
     fn send_dmx(&mut self) {
         self.output.aspect = self.comp.width as f32 / self.comp.height as f32;
         let t = Instant::now();
-        self.dmx = self.output.render_dmx(&self.frame);
+        self.dmx = match &self.test {
+            Some(t) if t.fixture < self.output.fixtures.len() => {
+                let (fixture, step, k) = (t.fixture, t.step(), t.phase());
+                self.output.render_dmx_by(&self.frame, &move |fi, i, n, _| {
+                    if fi != fixture {
+                        return Rgba::BLACK;
+                    }
+                    match step {
+                        TestStep::Red => Rgba::rgb(1.0, 0.0, 0.0),
+                        TestStep::Green => Rgba::rgb(0.0, 1.0, 0.0),
+                        TestStep::Blue => Rgba::rgb(0.0, 0.0, 1.0),
+                        TestStep::White => Rgba::rgb(1.0, 1.0, 1.0),
+                        TestStep::Run => {
+                            // A short white dot travelling in wiring order, first pixel stays red.
+                            let pos = (k * n as f32) as usize;
+                            if i == 0 {
+                                Rgba::rgb(1.0, 0.0, 0.0)
+                            } else if i.abs_diff(pos) <= (n / 40).max(1) {
+                                Rgba::rgb(1.0, 1.0, 1.0)
+                            } else {
+                                Rgba::BLACK
+                            }
+                        }
+                    }
+                })
+            }
+            _ => self.output.render_dmx(&self.frame),
+        };
         Metrics::smooth(&mut self.metrics.dmx_ms, t.elapsed().as_secs_f32() * 1000.0);
         if !self.output_enabled {
             if self.sender.take().is_some() {
@@ -291,6 +322,65 @@ impl Engine {
         } else {
             format!("Sending {sent} universe(s) — {}", errors.join("; "))
         };
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestStep {
+    Red,
+    Green,
+    Blue,
+    White,
+    Run,
+}
+
+impl TestStep {
+    pub const ALL: [TestStep; 5] = [TestStep::Red, TestStep::Green, TestStep::Blue, TestStep::White, TestStep::Run];
+
+    /// What the user should see on the real light right now.
+    pub fn expect(self) -> &'static str {
+        match self {
+            TestStep::Red => "all RED",
+            TestStep::Green => "all GREEN",
+            TestStep::Blue => "all BLUE",
+            TestStep::White => "all WHITE",
+            TestStep::Run => "a white dot running away from the RED first pixel",
+        }
+    }
+
+    pub fn wrong(self) -> &'static str {
+        match self {
+            TestStep::Red | TestStep::Green | TestStep::Blue => "Wrong colour? Change the colour order (e.g. GRB) in the fixture type.",
+            TestStep::White => "Pinkish or bluish? Check the colour order or the white mode.",
+            TestStep::Run => "Dot runs the wrong way? Tick Reverse. Starts in the middle? Check the address.",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FixtureTest {
+    pub fixture: usize,
+    pub started: Instant,
+}
+
+impl FixtureTest {
+    pub const STEP: f32 = 1.5;
+
+    pub fn new(fixture: usize) -> Self {
+        FixtureTest { fixture, started: Instant::now() }
+    }
+    fn t(&self) -> f32 {
+        self.started.elapsed().as_secs_f32() / Self::STEP
+    }
+    pub fn step(&self) -> TestStep {
+        // The running dot gets two steps' time.
+        let i = (self.t() as usize) % 6;
+        TestStep::ALL[i.min(4)]
+    }
+    /// 0..1 progress through the running-dot step.
+    pub fn phase(&self) -> f32 {
+        let t = self.t() % 6.0;
+        ((t - 4.0) / 2.0).clamp(0.0, 1.0)
     }
 }
 

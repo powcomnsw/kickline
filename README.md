@@ -86,11 +86,12 @@ rig.
 1. **Install.** Download the `.dmg` from [Releases](https://github.com/powcomnsw/lumen/releases/latest),
    drag the app into Applications, then right-click it and choose **Open** the first time
    (it isn't signed by Apple yet; see [first launch](packaging/macos/INSTALL.txt)).
-2. **Sound.** Open **Audio** and click **Use rekordbox (direct)**. With no music
+2. **Setup guide.** It opens the first time: it finds your controller, asks what
+   lights you have (strips, panels or anything from the library), then lets you
+   **test each light** for colour order and wiring direction. About five minutes.
+3. **Sound.** Open **Audio** and click **Use rekordbox (direct)**. With no music
    playing, **Demo beat** works too.
-3. **Fixtures.** Open **Advanced Output**, set your node's IP and network port, and
-   add your fixtures from the library or with **Add array**.
-4. **Go.** Click **DMX OUT** in the top bar.
+4. **Play.** Click clips and palettes. Your show **saves by itself**, and **⌘Z** undoes anything.
 
 <details>
 <summary><b>Other ways to get rekordbox audio in</b></summary>
@@ -162,6 +163,8 @@ crash reports and (if you choose) your project. Nothing is uploaded.
 
 | Area | |
 |---|---|
+| Getting started | Setup guide (controller → lights → test → play), "Test this light" for colour order and wiring, plain-language hover help for every lighting term |
+| Saving | Autosave, reopens your last show, New / Open / Save as, undo and redo (⌘Z / ⌘⇧Z) that never stops what's playing |
 | Look | Three dark themes (Tungsten, Gel, Stage) for dark venues, Atkinson Hyperlegible font, live clip thumbnails, a colour per layer |
 | Composition | Layers × clip grid, column triggers, opacity / blend / bypass / effects per layer, master, BPM clock, right-click clip editing |
 | Generators | Solid, Rainbow, Strobe, Chase, Plasma, Audio flash, Bands, Palette wash |

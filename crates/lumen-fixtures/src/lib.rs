@@ -567,15 +567,31 @@ impl AdvancedOutput {
 
     /// Render DMX for every lumiverse in use. Key = (lumiverse index, absolute universe).
     pub fn render_dmx(&self, frame: &Frame) -> BTreeMap<(usize, u16), [u8; UNIVERSE_SIZE]> {
+        self.render_dmx_by(frame, &|_, _, _, c| c)
+    }
+
+    /// Like `render_dmx`, but every pixel's colour goes through `f(fixture,
+    /// pixel, pixel_count, sampled)` first. Pixels are numbered in wiring
+    /// order (the order the data reaches them). Used by the fixture test.
+    pub fn render_dmx_by(
+        &self,
+        frame: &Frame,
+        f: &dyn Fn(usize, usize, usize, Rgba) -> Rgba,
+    ) -> BTreeMap<(usize, u16), [u8; UNIVERSE_SIZE]> {
         let mut out: BTreeMap<(usize, u16), [u8; UNIVERSE_SIZE]> = BTreeMap::new();
         let mut bytes = Vec::new();
-        for fx in &self.fixtures {
+        for (fi, fx) in self.fixtures.iter().enumerate() {
             let (Some(t), Some(lv)) = (self.types.get(fx.type_id), self.lumiverses.get(fx.lumiverse)) else { continue };
             let segs = self.layout(fx);
+            let cells = fx.pixel_local(t);
+            let n = cells.len();
             if let Some(slots) = &t.slots {
                 let Some(seg) = segs.first() else { continue };
-                let colors: Vec<Rgba> =
-                    fx.pixel_local(t).into_iter().map(|(lx, ly)| fx.sample_cell(self.aspect, t, frame, lx, ly)).collect();
+                let colors: Vec<Rgba> = cells
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (lx, ly))| f(fi, i, n, fx.sample_cell(self.aspect, t, frame, lx, ly)))
+                    .collect();
                 bytes.clear();
                 t.encode_slots(slots, &colors, fx.white, &mut bytes);
                 write(&mut out, fx.lumiverse, lv.universe + seg.universe_offset, seg.start, &bytes);
@@ -596,10 +612,10 @@ impl AdvancedOutput {
                     .collect();
                 write(&mut out, fx.lumiverse, lv.universe + seg.universe_offset, seg.start, &header);
             }
-            for (lx, ly) in fx.pixel_local(t) {
+            for (i, (lx, ly)) in cells.into_iter().enumerate() {
                 let Some(seg) = seg_iter.next() else { break };
                 bytes.clear();
-                t.encode_pixel(fx.sample_cell(self.aspect, t, frame, lx, ly), fx.white, &mut bytes);
+                t.encode_pixel(f(fi, i, n, fx.sample_cell(self.aspect, t, frame, lx, ly)), fx.white, &mut bytes);
                 write(&mut out, fx.lumiverse, lv.universe + seg.universe_offset, seg.start, &bytes);
             }
         }
@@ -1103,6 +1119,19 @@ mod tests {
         o3.lumiverses[1].target = "2.0.0.50".into();
         o3.fixtures.push(Fixture { lumiverse: 1, ..o3.fixtures[0].clone() });
         assert!(!o3.conflicts().is_empty());
+    }
+
+    #[test]
+    fn render_by_can_solo_one_fixture() {
+        let o = AdvancedOutput::demo();
+        let frame = Frame::transparent(8, 8);
+        // Identity matches the normal render.
+        assert_eq!(o.render_dmx_by(&frame, &|_, _, _, c| c), o.render_dmx(&frame));
+        // Solo fixture 0 in full red; everything else must be zero.
+        let solo = o.render_dmx_by(&frame, &|fi, _, _, _| if fi == 0 { Rgba::rgb(1.0, 0.0, 0.0) } else { Rgba::BLACK });
+        let lit: usize = solo.values().map(|u| u.iter().filter(|&&b| b > 0).count()).sum();
+        let t = &o.types[o.fixtures[0].type_id];
+        assert_eq!(lit, t.pixel_count(), "one red channel per pixel of fixture 0 only");
     }
 
     #[test]

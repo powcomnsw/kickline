@@ -5,27 +5,21 @@ mod diagnostics;
 mod dmx_monitor;
 mod engine;
 mod fixture_editor;
+mod guide;
 mod link;
 mod log;
 mod paths;
+mod project;
 mod theme;
 mod util;
 
 use eframe::egui::{self, Color32, Sense, Stroke, Vec2};
 use engine::{AudioSource, Engine};
 use lumen_audio::{AppInfo, AudioInput, DeviceInfo};
-use lumen_core::Composition;
-use lumen_fixtures::AdvancedOutput;
-use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-#[derive(Serialize, Deserialize)]
-pub struct Project {
-    pub composition: Composition,
-    pub output: AdvancedOutput,
-}
 
 pub struct Windows {
     pub advanced_output: bool,
@@ -54,6 +48,9 @@ pub struct LumenApp {
     pub dmx_view: dmx_monitor::State,
     /// Art-Net nodes heard on the network (polled in the background).
     pub nodes: lumen_output::NodeWatcher,
+    /// The open show: file, undo history, autosave.
+    pub session: project::Session,
+    pub guide: guide::Guide,
 }
 
 /// What every UI function gets: the locked engine (`app.e`) plus UI state
@@ -78,10 +75,8 @@ impl DerefMut for View<'_> {
 
 impl LumenApp {
     fn new(gpu: String) -> Self {
-        let engine = Arc::new(Mutex::new(Engine::new(
-            Composition::demo(),
-            AdvancedOutput::demo(),
-        )));
+        let (path, show, first_run) = project::startup();
+        let engine = Arc::new(Mutex::new(Engine::new(show.composition, show.output)));
         let engine_thread = Some(engine::spawn(engine.clone()));
         LumenApp {
             engine,
@@ -104,59 +99,13 @@ impl LumenApp {
             fe: Default::default(),
             dmx_view: Default::default(),
             nodes: lumen_output::NodeWatcher::start(),
+            session: project::Session::new(path, first_run),
+            guide: guide::Guide::starting(first_run),
         }
     }
 }
 
 impl View<'_> {
-    fn save(&mut self) {
-        let path = paths::project_file();
-        let proj = Project {
-            composition: self.e.comp.clone(),
-            output: self.e.output.clone(),
-        };
-        match serde_json::to_string_pretty(&proj)
-            .map_err(|e| e.to_string())
-            .and_then(|s| std::fs::write(&path, s).map_err(|e| e.to_string()))
-        {
-            Ok(()) => {
-                self.e.status = format!("Saved {}", path.display());
-                log::info("project", self.e.status.clone());
-            }
-            Err(err) => {
-                self.e.status = format!("Save failed: {err}");
-                log::error(
-                    "project",
-                    format!("save to {} failed: {err}", path.display()),
-                );
-            }
-        }
-    }
-
-    fn load(&mut self) {
-        let path = paths::project_file();
-        let res = std::fs::read_to_string(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|s| serde_json::from_str::<Project>(&s).map_err(|e| e.to_string()));
-        match res {
-            Ok(p) => {
-                self.e.comp = p.composition;
-                self.e.output = p.output;
-                self.s.ao = Default::default();
-                self.s.fe = Default::default();
-                self.e.status = format!("Loaded {}", path.display());
-                log::info("project", self.e.status.clone());
-            }
-            Err(err) => {
-                self.e.status = format!("Load failed: {err}");
-                log::error(
-                    "project",
-                    format!("load from {} failed: {err}", path.display()),
-                );
-            }
-        }
-    }
-
     pub fn stop_audio(&mut self) {
         self.e.set_audio(AudioSource::Off);
         self.s.audio_input = None;
@@ -210,11 +159,14 @@ impl View<'_> {
                 self.e.output_enabled = !on;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Load").clicked() {
-                    self.load();
+                self.show_menu(ui);
+                let can_redo = self.session.can_redo();
+                if ui.add_enabled(can_redo, egui::Button::new("↷")).on_hover_text("Redo (⌘⇧Z)").clicked() {
+                    project::redo_step(self);
                 }
-                if ui.button("Save").clicked() {
-                    self.save();
+                let can_undo = self.session.can_undo();
+                if ui.add_enabled(can_undo, egui::Button::new("↶")).on_hover_text("Undo (⌘Z)").clicked() {
+                    project::undo_step(self);
                 }
                 ui.add_space(12.0);
                 let (_, errs) = log::counts();
@@ -230,12 +182,74 @@ impl View<'_> {
         ui.add_space(4.0);
     }
 
+    /// The show's name, save state and file actions.
+    fn show_menu(&mut self, ui: &mut egui::Ui) {
+        let t = theme::current();
+        let name = self.session.name();
+        let (mark, state) = if self.session.save_error.is_some() {
+            ("⚠", "Not saved! Open this menu for details.")
+        } else if self.session.dirty() {
+            ("•", "Saving…")
+        } else {
+            ("✓", "All changes saved")
+        };
+        let short: String = if name.chars().count() > 18 { name.chars().take(17).chain(['…']).collect() } else { name.clone() };
+        let label = egui::RichText::new(format!("{short} {mark}"));
+        let label = if self.session.save_error.is_some() { label.color(t.err) } else { label };
+        let mut action = None;
+        ui.menu_button(label, |ui| {
+            ui.weak("Changes save automatically.");
+            if let Some(e) = &self.session.save_error {
+                ui.colored_label(t.err, format!("Last save failed: {e}"));
+            }
+            ui.separator();
+            if ui.button("New show").clicked() {
+                action = Some(0);
+            }
+            if ui.button("Open…").clicked() {
+                action = Some(1);
+            }
+            if ui.button("Save as…").on_hover_text("Save a copy under a new name and keep working in the copy").clicked() {
+                action = Some(2);
+            }
+            if ui.button("Save now  ⌘S").clicked() {
+                action = Some(3);
+            }
+            ui.separator();
+            if ui.button("Setup guide…").clicked() {
+                action = Some(4);
+            }
+            ui.weak(self.session.path.display().to_string());
+        })
+        .response
+        .on_hover_text(format!("{name}: {state}. Changes save automatically."));
+        match action {
+            Some(0) => {
+                project::new_show(self);
+                self.s.guide.open();
+            }
+            Some(1) => project::open_dialog(self),
+            Some(2) => project::save_as_dialog(self),
+            Some(3) => project::save_now(self),
+            Some(4) => self.s.guide.open(),
+            _ => {}
+        }
+    }
+
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         let t = theme::current();
         ui.horizontal(|ui| {
             let (dot, txt) = if self.e.output_enabled { (t.ok, self.e.status.clone()) } else { (t.weak, "DMX output off".into()) };
             ui.colored_label(dot, "●");
             ui.label(egui::RichText::new(txt).color(t.weak));
+            if let Some(tst) = self.e.test {
+                let name = self.e.output.fixtures.get(tst.fixture).map(|f| f.name.clone()).unwrap_or_default();
+                ui.separator();
+                ui.colored_label(t.warn, format!("Testing {name}: other lights are dark"));
+                if ui.small_button("Stop test").clicked() {
+                    self.e.test = None;
+                }
+            }
             if self.e.output_enabled {
                 let seen = self.nodes.nodes();
                 let mut lost = Vec::new();
@@ -328,6 +342,7 @@ impl eframe::App for LumenApp {
             s: self,
         };
         diagnostics::poll(&mut v);
+        project::tick(&mut v, &ctx);
         if let Some(at) = v.export_after {
             let up = log::uptime();
             if up > at - 3.0 && !v.export_probe_started && !v.diag.running() {
@@ -344,7 +359,7 @@ impl eframe::App for LumenApp {
         }
 
         // Poll for nodes while output is on or the patch is open.
-        v.s.nodes.set_active(v.e.output_enabled || v.s.windows.advanced_output);
+        v.s.nodes.set_active(v.e.output_enabled || v.s.windows.advanced_output || v.s.guide.wants_nodes());
         let was_open = [v.windows.advanced_output, v.windows.fixture_editor, v.windows.dmx_monitor, v.windows.audio, v.windows.diagnostics];
         egui::Panel::top("top").show(ui, |ui| v.top_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| v.status_bar(ui));
@@ -391,6 +406,8 @@ impl eframe::App for LumenApp {
             .show(&ctx, |ui| diagnostics::ui(&mut v, ui));
         v.windows.diagnostics = open;
 
+        guide::ui(&mut v, &ctx);
+
         // A window that was just opened (from a button anywhere) always comes to the front.
         let now_open = [v.windows.advanced_output, v.windows.fixture_editor, v.windows.dmx_monitor, v.windows.audio, v.windows.diagnostics];
         for (i, title) in ["Advanced Output", "Fixture Editor", "DMX Monitor", "Audio", "Diagnostics"].iter().enumerate() {
@@ -404,6 +421,11 @@ impl eframe::App for LumenApp {
     }
 
     fn on_exit(&mut self) {
+        let engine = self.engine.clone();
+        if let Ok(mut e) = engine.lock() {
+            let mut v = View { e: &mut e, s: self };
+            project::save_now(&mut v);
+        }
         if let Ok(mut e) = self.engine.lock() {
             e.shutdown = true;
             e.wake.notify();

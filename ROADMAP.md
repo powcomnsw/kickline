@@ -75,6 +75,11 @@ Key decisions:
 - [ ] Developer ID signing + notarisation (needs an Apple Developer account)
 - [ ] Windows / Linux installers
 
+## Beginner batch (done)
+
+- [x] Undo / redo, autosave, reopen last show, New / Open / Save as
+- [x] First-run setup guide, Test this light, jargon hover help
+
 ## Known limitations of v0.6
 - Imported moving heads light up but don't move yet: pan/tilt are held centred.
 - Drum detection is tuned for four-on-the-floor dance music; use the Tuning sliders for other styles.

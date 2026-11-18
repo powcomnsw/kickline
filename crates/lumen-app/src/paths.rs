@@ -69,6 +69,21 @@ pub fn project_file() -> PathBuf {
     }
 }
 
+fn last_project_file() -> PathBuf {
+    data_dir().join("last_project.txt")
+}
+
+/// The show that was open when Kickline last ran.
+pub fn last_project() -> Option<PathBuf> {
+    let s = std::fs::read_to_string(last_project_file()).ok()?;
+    let p = PathBuf::from(s.trim());
+    (!s.trim().is_empty()).then_some(p)
+}
+
+pub fn set_last_project(path: &std::path::Path) {
+    let _ = std::fs::write(last_project_file(), path.to_string_lossy().as_bytes());
+}
+
 /// Your own fixture files (.qxf), scanned by the fixture library.
 pub fn fixtures_dir() -> PathBuf {
     let d = projects_dir().join("Fixtures");

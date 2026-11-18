@@ -14,6 +14,7 @@ serde_json.workspace = true
 eframe = "0.37"
 rusty_link = { version = "0.4", optional = true }
 if-addrs = "0.15"
+rfd = { version = "0.18.0", default-features = false, features = ["xdg-portal"] }
 
 [features]
 default = ["link"]

@@ -189,7 +189,7 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_outpu
     }
     let t = crate::theme::current();
     ui.horizontal(|ui| {
-        ui.heading("Lumiverses");
+        ui.heading("Lumiverses").on_hover_text("A lumiverse is one output: where the data goes (a controller's IP), how (Art-Net or sACN) and from which universe. Most rigs need one per controller.");
         if ui.add(egui::Button::new("Find nodes").selected(st.find_nodes)).on_hover_text("List the Art-Net nodes on your network").clicked() {
             st.find_nodes = !st.find_nodes;
             watcher.poll_now();
@@ -247,7 +247,7 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_outpu
                 ui.label("Name");
                 ui.text_edit_singleline(&mut l.name);
                 ui.end_row();
-                ui.label("Protocol");
+                ui.label("Protocol").on_hover_text("How the data travels. Art-Net is the most common for LED controllers; sACN (E1.31) is common on consoles and some controllers. Use what your controller is set to.");
                 egui::ComboBox::from_id_salt("lvproto")
                     .selected_text(l.protocol.name())
                     .show_ui(ui, |ui| {
@@ -255,16 +255,16 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_outpu
                         ui.selectable_value(&mut l.protocol, Protocol::Sacn, "sACN");
                     });
                 ui.end_row();
-                ui.label("Universe");
+                ui.label("Universe").on_hover_text("A universe is 512 channels: about 170 RGB pixels, or one controller output. Kickline counts from 0; if your controller counts from 1, add one.");
                 ui.add(egui::DragValue::new(&mut l.universe).range(0..=32767));
                 ui.end_row();
-                ui.label("Target IP");
+                ui.label("Target IP").on_hover_text("The controller's network address. 255.255.255.255 sends to everything on the network (easy, but busier); the controller's own IP is better. Find nodes fills this in.");
                 ui.add_enabled(
                     l.protocol == Protocol::ArtNet,
                     egui::TextEdit::singleline(&mut l.target).desired_width(130.0),
                 );
                 ui.end_row();
-                ui.label("Network port");
+                ui.label("Network port").on_hover_text("Which of this Mac's network connections to send through, e.g. a USB Ethernet adapter. Automatic lets macOS choose.");
                 let label = match &l.interface {
                     None => "Automatic".to_string(),
                     Some(n) => st.ports.iter().find(|p| &p.name == n).map(|p| p.label()).unwrap_or_else(|| format!("{n} (not connected)")),
@@ -494,6 +494,33 @@ fn array_form(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
     });
 }
 
+/// "Test this light": solo one fixture and walk through colours and wiring.
+pub fn test_row(test: &mut Option<crate::engine::FixtureTest>, output_on: &mut bool, fixture: usize, ui: &mut egui::Ui) {
+    let t = crate::theme::current();
+    let mine = test.is_some_and(|x| x.fixture == fixture);
+    if !mine {
+        if ui
+            .button("Test this light")
+            .on_hover_text("Lights only this fixture: red, green, blue, white, then a dot running from its first pixel. Everything else goes dark until you stop.")
+            .clicked()
+        {
+            *test = Some(crate::engine::FixtureTest::new(fixture));
+            *output_on = true;
+        }
+        return;
+    }
+    let x = test.expect("mine");
+    egui::Frame::new().fill(t.raised).corner_radius(t.radius).inner_margin(8).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            if ui.add(egui::Button::new(egui::RichText::new("Stop test").color(t.on_accent)).fill(t.accent)).clicked() {
+                *test = None;
+            }
+            ui.label(egui::RichText::new(format!("The light should be {}", x.step().expect())).font(crate::theme::bold(t.text_size)));
+        });
+        ui.weak(x.step().wrong());
+    });
+}
+
 /// Returns true when "Edit type" was clicked.
 fn fixture_props(o: &mut AdvancedOutput, idx: usize, ui: &mut egui::Ui) -> bool {
     let mut edit = false;
@@ -521,7 +548,7 @@ fn fixture_props(o: &mut AdvancedOutput, idx: usize, ui: &mut egui::Ui) -> bool 
                     ui.selectable_value(&mut fx.type_id, i, t);
                 }
             });
-        ui.label("Lumiverse");
+        ui.label("Lumiverse").on_hover_text("Which output (controller) this light is connected to.");
         egui::ComboBox::from_id_salt("fxlv")
             .selected_text(lvs.get(fx.lumiverse).cloned().unwrap_or_default())
             .show_ui(ui, |ui| {
@@ -532,12 +559,12 @@ fn fixture_props(o: &mut AdvancedOutput, idx: usize, ui: &mut egui::Ui) -> bool 
         if ui.small_button("Edit type").on_hover_text("Open this fixture's type in the Fixture Editor").clicked() {
             edit = true;
         }
-        ui.label("Universe");
+        ui.label("Universe").on_hover_text("A universe is 512 channels: about 170 RGB pixels, or one controller output. Kickline counts from 0; if your controller counts from 1, add one.");
         let mut abs = base + fx.universe_offset;
         if ui.add(egui::DragValue::new(&mut abs).range(base..=32767)).changed() {
             fx.universe_offset = abs.saturating_sub(base);
         }
-        ui.label("Address");
+        ui.label("Address").on_hover_text("The DMX start channel (1–512) within the universe: the first channel this light listens to. On most lights it's set with buttons or DIP switches.");
         ui.add(egui::DragValue::new(&mut fx.address).range(1..=512));
         ui.weak(range);
     });
@@ -578,10 +605,10 @@ fn fixture_props(o: &mut AdvancedOutput, idx: usize, ui: &mut egui::Ui) -> bool 
                 .max_decimals(1)
                 .suffix("°"),
         );
-        ui.checkbox(&mut fx.snake, "Snake");
-        ui.checkbox(&mut fx.reverse, "Reverse");
+        ui.checkbox(&mut fx.snake, "Snake").on_hover_text("For panels wired back and forth: every other row runs the opposite way.");
+        ui.checkbox(&mut fx.reverse, "Reverse").on_hover_text("The data enters at the other end. Tick it if effects run the wrong way along the strip.");
         if has_white {
-            ui.label("White");
+            ui.label("White").on_hover_text("For RGBW lights: how white and pale colours are made. White only uses the white LEDs (cleanest), RGB + white is brightest, RGB only ignores the white LEDs.");
             egui::ComboBox::from_id_salt("fxwhite").selected_text(fx.white.name()).show_ui(ui, |ui| {
                 for m in lumen_fixtures::WhiteMode::ALL {
                     ui.selectable_value(&mut fx.white, m, m.name());
@@ -596,6 +623,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
     let View { e, s } = app;
     let (output, frame, st, routes) = (&mut e.output, &e.frame, &mut s.ao, &e.routes);
     let (windows, fe) = (&mut s.windows, &mut s.fe);
+    let (test, out_on) = (&mut e.test, &mut e.output_enabled);
     let watcher = s.nodes.clone();
     let nodes = watcher.nodes();
     let mut edit_type = None;
@@ -762,6 +790,8 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                 if fixture_props(output, i, ui) {
                     edit_type = Some(output.fixtures[i].type_id);
                 }
+                ui.add_space(4.0);
+                test_row(test, out_on, i, ui);
             }
             None => {
                 ui.weak("Click a fixture to edit it, or add one from the list on the left.");

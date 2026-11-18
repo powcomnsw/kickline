@@ -100,6 +100,25 @@ impl Composition {
 
     /// A demo set showing how to split the music across layers:
     /// kick flashes, snare steps through chases, bass drives the background.
+    /// Swap in an edited copy of the show (undo/redo) while keeping what's
+    /// live: the playhead, audio, tempo, master, which clips are playing and
+    /// the current palette. Nothing jumps or restarts.
+    pub fn replace_show(&mut self, mut new: Composition) {
+        new.beat = self.beat;
+        new.audio = self.audio;
+        new.bpm = self.bpm;
+        new.master = self.master;
+        for (i, l) in new.layers.iter_mut().enumerate() {
+            if let Some(old) = self.layers.get(i) {
+                l.active = old.active.filter(|&c| l.clips.get(c).is_some_and(|c| c.is_some()));
+                l.trigger_beat = old.trigger_beat;
+                l.seen_hits = old.seen_hits;
+            }
+        }
+        new.palettes.keep_live(&self.palettes);
+        *self = new;
+    }
+
     pub fn demo() -> Self {
         let cols = 6;
         let mut c = Composition::new(64, 36, cols);
@@ -247,6 +266,28 @@ impl Composition {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replace_show_keeps_playback() {
+        let mut c = Composition::demo();
+        c.beat = 12.5;
+        c.bpm = 128.0;
+        c.layers[0].active = Some(1);
+        let mut edited = c.clone();
+        edited.layers[0].name = "Renamed".into();
+        edited.layers[0].active = None;
+        edited.bpm = 90.0;
+        edited.beat = 0.0;
+        c.replace_show(edited);
+        assert_eq!(c.layers[0].name, "Renamed");
+        assert_eq!(c.layers[0].active, Some(1));
+        assert_eq!((c.beat, c.bpm), (12.5, 128.0));
+        // A playing clip that no longer exists stops.
+        let mut gone = c.clone();
+        gone.layers[0].clips[1] = None;
+        c.replace_show(gone);
+        assert_eq!(c.layers[0].active, None);
+    }
 
     #[test]
     fn empty_composition_is_black() {

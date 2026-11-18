@@ -148,6 +148,16 @@ impl Palettes {
         self.select(self.active + 1, beat);
     }
 
+    /// Keep the live state (current palette, fade in progress, hit counter)
+    /// from `old` after the palette list was replaced (undo, load).
+    pub fn keep_live(&mut self, old: &Palettes) {
+        self.active = old.active.min(self.list.len().saturating_sub(1));
+        self.from = old.from;
+        self.fade_start = old.fade_start;
+        self.seen_hits = old.seen_hits;
+        self.counted = old.counted;
+    }
+
     /// Called each frame with the latest analysis; handles automatic changes.
     pub fn update(&mut self, audio: &AudioBands, beat: f64) {
         if let Some(from) = self.from {
