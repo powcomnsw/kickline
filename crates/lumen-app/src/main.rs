@@ -413,19 +413,7 @@ impl View<'_> {
             Partial => ("OUTPUT PARTLY FAILING", theme::dim(t.warn, 0.35), t.warn),
             Dead => ("OUTPUT DEAD", if blink { t.err } else { theme::dim(t.err, 0.5) }, Color32::WHITE),
         };
-        let r = ui.add(egui::Button::new(egui::RichText::new(label).font(theme::bold(t.text_size - 2.0)).color(fg)).fill(fill).corner_radius(t.radius));
-        let tip = match state {
-            Off => "DMX output is off. Click DMX OUT in the top bar to send to your lights.".to_string(),
-            Idle => "Output is on, but no fixtures or universes are set up to send yet.".to_string(),
-            Live => "Packets are leaving this computer for every universe. Art-Net doesn't confirm delivery: a green \"node answering\" next to this is the proof the controller is there (some cheap controllers never answer).".to_string(),
-            Partial | Dead => {
-                let e = self.e.health.last_error.as_ref().map(|(_, e)| e.clone()).unwrap_or_default();
-                format!("{e}\nClick for Diagnostics.")
-            }
-        };
-        if r.on_hover_text(tip).clicked() && matches!(state, Partial | Dead) {
-            self.s.windows.diagnostics = true;
-        }
+        let mut detail = String::new();
         if matches!(state, Live | Partial) {
             let art: Vec<u16> = self.e.health.universes.iter().filter(|(sacn, _)| !sacn).map(|(_, u)| *u).collect();
             let sacn: Vec<u16> = self.e.health.universes.iter().filter(|(sacn, _)| *sacn).map(|(_, u)| *u + 1).collect();
@@ -438,12 +426,24 @@ impl View<'_> {
                 parts.push(format!("sACN U{}", engine::universe_ranges(sacn.clone())));
             }
             let n = art.len() + sacn.len();
-            ui.label(egui::RichText::new(format!("{} · {n} universe{} · {:.0} Hz", parts.join(" + "), if n == 1 { "" } else { "s" }, self.e.metrics.output_hz())).color(t.weak));
+            detail = format!("\n\n{} · {n} universe{} · {:.0} Hz", parts.join(" + "), if n == 1 { "" } else { "s" }, self.e.metrics.output_hz());
+        }
+        let r = ui.add(egui::Button::new(egui::RichText::new(label).font(theme::bold(t.text_size - 2.0)).color(fg)).fill(fill).corner_radius(t.radius));
+        let tip = match state {
+            Off => "DMX output is off. Click DMX in the top bar to send to your lights.".to_string(),
+            Idle => "Output is on, but no fixtures or universes are set up to send yet.".to_string(),
+            Live => "Packets are leaving this computer for every universe. Art-Net doesn't confirm delivery: \"answering\" in the Lights card is the proof the controller is there (some cheap controllers never answer).".to_string(),
+            Partial | Dead => {
+                let e = self.e.health.last_error.as_ref().map(|(_, e)| e.clone()).unwrap_or_default();
+                format!("{e}\nClick for Diagnostics.")
+            }
+        };
+        if r.on_hover_text(format!("{tip}{detail}")).clicked() && matches!(state, Partial | Dead) {
+            self.s.windows.diagnostics = true;
         }
         if let Some(sw) = self.e.sweep {
             let base = self.e.output.lumiverses.get(sw.lumiverse).map(|l| l.universe).unwrap_or(0);
-            ui.separator();
-            ui.colored_label(t.warn, format!("Sweeping: universe {} lit", base + sw.current()));
+            ui.colored_label(t.warn, format!("Sweep U{}", base + sw.current()));
             if ui.small_button("Stop sweep").clicked() {
                 self.e.sweep = None;
             }
