@@ -27,9 +27,9 @@ sACN. It listens to the music itself and splits it into **bass, kick, snare,
 hi-hats and mids**, so each part of the track can drive a different part of the
 rig.
 
-> **New name.** Kickline used to be called Lumen. Releases up to 0.6.0 still say
-> Lumen; the next release carries the new name and icon, and moves your projects
-> and settings across by itself.
+> **New name.** Kickline used to be called Lumen. From 0.7.0 the app carries the new
+> name and icon, and moves your Lumen projects and settings across by itself. macOS
+> asks for its permissions (microphone, Local Network, audio recording) once more.
 
 <p align="center">
   <img src="docs/screenshots/main.png" alt="Kickline main window: palette strip, layers and clip grid" width="100%">
@@ -167,6 +167,7 @@ crash reports and (if you choose) your project. Nothing is uploaded.
 | Generators | Solid, Rainbow, Strobe, Chase, Plasma, Audio flash, Bands, Palette wash |
 | Effects | Brightness, Hue shift, Invert, Pulse, Audio brightness, Audio hue |
 | Colour palettes | Clips use palette colour 1–4 or a fixed colour; 8 palettes to start, editable; change on Bar / Beat / Kick / Snare / Hi-hat every N, with a crossfade |
+| Art-Net nodes | Find nodes (ArtPoll) with one-click setup; live status per lumiverse, wrong-universe warnings, alert when a node drops out |
 | Advanced Output | Art-Net / sACN lumiverses with their own universe, IP and network port; drag / resize / rotate fixtures; snake and reverse wiring; universe spill; overlap warnings; array tool; RGBW white modes |
 | Fixtures | 1,781 built-in (QLC+), `.qxf` import, pixel-grid editor, colour order presets |
 | Audio | Live input or loopback, 5 bands + level, kick / snare / hi-hat detection, per-layer routing |
