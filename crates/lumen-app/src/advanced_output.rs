@@ -21,6 +21,9 @@ pub struct State {
     ports_at: Option<std::time::Instant>,
     find_nodes: bool,
     sweep_count: u16,
+    /// "Add a controller" form, when open.
+    pub controller: Option<lumen_fixtures::ControllerSetup>,
+    controller_error: Option<String>,
 }
 
 struct ArrayForm {
@@ -322,6 +325,11 @@ fn lumiverse_panel(
         ));
         st.lumiverse = o.lumiverses.len() - 1;
     }
+    if ui.button("+ Controller…").on_hover_text("Pick your pixel controller and how many LEDs are on each output: Kickline sets up the universes and addresses to match").clicked() {
+        st.controller = Some(lumen_fixtures::ControllerSetup::new(0, st.lumiverse));
+        st.controller_error = None;
+        st.selected = None;
+    }
     }
     if settings {
     let mut sweep_here = false;
@@ -495,6 +503,7 @@ fn lumiverse_panel(
                 reverse: false,
                 universe_offset: o.next_free_slot(st.lumiverse).0,
                 white: Default::default(),
+                groups: Vec::new(),
             };
             o.fixtures.push(fx);
             st.selected = Some(o.fixtures.len() - 1);
@@ -695,6 +704,7 @@ fn fixture_inspector(
     let range = o.range_label(&o.fixtures[idx]);
     let type_name = o.types.get(o.fixtures[idx].type_id).map(|t| t.name.clone()).unwrap_or_default();
     let lv_name = o.lumiverses.get(o.fixtures[idx].lumiverse).map(|l| l.name.clone()).unwrap_or_default();
+    let all_groups = o.group_names();
     ui.add(egui::TextEdit::singleline(&mut o.fixtures[idx].name).font(crate::theme::bold(t.text_size + 4.0)).frame(egui::Frame::NONE));
     ui.weak(format!("{type_name} · {lv_name} · {range}"));
     ui.add_space(6.0);
@@ -782,7 +792,154 @@ fn fixture_inspector(
                 });
             }
         });
+    egui::CollapsingHeader::new(egui::RichText::new(format!("Groups ({})", fx.groups.len())).font(crate::theme::bold(t.text_size)))
+        .id_salt("insp_groups")
+        .default_open(true)
+        .show(ui, |ui| {
+            if all_groups.is_empty() {
+                ui.weak("No groups yet. Make them in Set up → Stage.");
+            }
+            ui.horizontal_wrapped(|ui| {
+                for g in &all_groups {
+                    let mut on = fx.groups.contains(g);
+                    if ui.toggle_value(&mut on, g).changed() {
+                        if on {
+                            fx.groups.push(g.clone());
+                        } else {
+                            fx.groups.retain(|x| x != g);
+                        }
+                    }
+                }
+            });
+        });
     edit
+}
+
+/// Pick a controller, say how many LEDs are on each output, and Kickline
+/// adds one strip per output, addressed the way the controller counts.
+fn controller_form(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
+    use lumen_fixtures::{ControllerSetup, CONTROLLERS};
+    let t = crate::theme::current();
+    let Some(cs) = st.controller.as_mut() else { return };
+    ui.label(egui::RichText::new("Add a controller").font(crate::theme::bold(t.text_size + 4.0)));
+    ui.add_space(4.0);
+    let mut pick = None;
+    egui::Grid::new("ctrl_g").num_columns(2).spacing([10.0, 7.0]).show(ui, |ui| {
+        ui.label("Controller");
+        egui::ComboBox::from_id_salt("ctrl_kind").selected_text(cs.controller().name).show_ui(ui, |ui| {
+            for (i, c) in CONTROLLERS.iter().enumerate() {
+                if ui.selectable_label(cs.controller == i, c.name).clicked() {
+                    pick = Some(i);
+                }
+            }
+        });
+        ui.end_row();
+        ui.label("Name");
+        ui.text_edit_singleline(&mut cs.name);
+        ui.end_row();
+        ui.label("Sends on");
+        egui::ComboBox::from_id_salt("ctrl_lv").selected_text(o.lumiverses.get(cs.lumiverse).map(|l| l.name.clone()).unwrap_or_default()).show_ui(ui, |ui| {
+            for (i, l) in o.lumiverses.iter().enumerate() {
+                ui.selectable_value(&mut cs.lumiverse, i, &l.name);
+            }
+        });
+        ui.end_row();
+        if let Some(l) = o.lumiverses.get_mut(cs.lumiverse) {
+            ui.label("Start universe").on_hover_text("The universe the controller's output 1 listens on (its \"start universe\").");
+            ui.add(egui::DragValue::new(&mut l.universe).range(0..=32767));
+            ui.end_row();
+        }
+        ui.label("LEDs");
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut cs.rgbw, false, "RGB");
+            ui.selectable_value(&mut cs.rgbw, true, "RGBW");
+        });
+        ui.end_row();
+    });
+    if let Some(i) = pick {
+        let (name, lv) = (cs.name.clone(), cs.lumiverse);
+        let old = cs.leds.clone();
+        *cs = ControllerSetup::new(i, lv);
+        for (k, n) in old.into_iter().enumerate().take(cs.leds.len()) {
+            cs.leds[k] = n;
+        }
+        if !CONTROLLERS.iter().any(|c| c.name.starts_with(name.as_str())) {
+            cs.name = name;
+        }
+    }
+    ui.label(egui::RichText::new(cs.controller().note).color(t.weak).size(t.text_size - 2.0));
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("LEDs on each output").font(crate::theme::bold(t.text_size)));
+    egui::Grid::new("ctrl_leds").num_columns(4).spacing([10.0, 5.0]).show(ui, |ui| {
+        for k in 0..cs.leds.len() {
+            ui.label(format!("Out {}", k + 1));
+            ui.add(egui::DragValue::new(&mut cs.leds[k]).range(0..=8192).speed(1.0));
+            if k % 2 == 1 {
+                ui.end_row();
+            }
+        }
+    });
+    ui.add_space(4.0);
+    let suggested = cs.suggested_universes();
+    if cs.universes_per_output < suggested {
+        cs.universes_per_output = suggested;
+    }
+    let max_u = cs.max_universes().max(1);
+    ui.horizontal(|ui| {
+        ui.label("Universes per output");
+        ui.add(egui::DragValue::new(&mut cs.universes_per_output).range(1..=max_u));
+        if cs.universes_per_output != suggested && ui.small_button(format!("Fewest ({suggested})")).clicked() {
+            cs.universes_per_output = suggested;
+        }
+    })
+    .response
+    .on_hover_text("Set the same number on the controller. Output 2 starts right after output 1's universes, and so on.");
+    ui.add_space(6.0);
+    let plan = o.controller_plan(cs);
+    egui::Grid::new("ctrl_plan").num_columns(3).striped(true).spacing([12.0, 4.0]).show(ui, |ui| {
+        ui.label(egui::RichText::new("Output").color(t.weak));
+        ui.label(egui::RichText::new("Universes").color(t.weak));
+        ui.label(egui::RichText::new("").color(t.weak));
+        ui.end_row();
+        for r in plan.iter().filter(|r| r.leds > 0) {
+            ui.label(format!("Out {} · {} LEDs", r.output, r.leds));
+            ui.label(if r.universes.0 == r.universes.1 { format!("{}", r.universes.0) } else { format!("{} – {}", r.universes.0, r.universes.1) });
+            if r.fits {
+                ui.colored_label(t.ok, "✓");
+            } else {
+                ui.colored_label(t.err, "too long");
+            }
+            ui.end_row();
+        }
+    });
+    if plan.iter().all(|r| r.leds == 0) {
+        ui.weak("Enter the LED count for each output you use.");
+    }
+    if let Some(e) = &st.controller_error {
+        ui.colored_label(t.err, e);
+    }
+    ui.add_space(8.0);
+    let mut close = false;
+    ui.horizontal(|ui| {
+        let any = cs.leds.iter().any(|&n| n > 0);
+        if ui.add_enabled(any, egui::Button::new(egui::RichText::new("Add strips").color(t.on_accent)).fill(t.accent)).clicked() {
+            match o.add_controller(cs) {
+                Ok(r) => {
+                    st.selected = Some(r.start);
+                    st.lumiverse = cs.lumiverse;
+                    close = true;
+                }
+                Err(e) => st.controller_error = Some(e),
+            }
+        }
+        if ui.button("Cancel").clicked() {
+            close = true;
+        }
+    });
+    ui.weak("Each output becomes one strip in a group named after the controller. Move and shape them on the canvas afterwards.");
+    if close {
+        st.controller = None;
+    }
 }
 
 
@@ -808,6 +965,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
         .resizable(true)
         .show(ui, |ui| {
             egui::ScrollArea::vertical().id_salt("ao_insp").show(ui, |ui| match st.selected.filter(|&i| i < output.fixtures.len()) {
+                _ if st.controller.is_some() => controller_form(output, st, ui),
                 Some(i) => {
                     if fixture_inspector(output, i, test, out_on, dmx, ui) {
                         edit_type = Some(output.fixtures[i].type_id);

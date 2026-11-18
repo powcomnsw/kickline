@@ -99,6 +99,11 @@ pub struct Engine {
     pub onset: [(f32, f32); 3],
     /// When each lumiverse last sent, for its refresh-rate cap.
     last_sent: std::collections::HashMap<usize, Instant>,
+    /// Every light dark (the fixture test and sweep still work).
+    pub blackout: bool,
+    /// The colour each fixture's pixels were sent, in wiring order (for the
+    /// preview: exactly what the lights get).
+    pub lights: Vec<Vec<[u8; 3]>>,
 }
 
 impl Engine {
@@ -131,6 +136,8 @@ impl Engine {
             sweep: None,
             health: Default::default(),
             last_sent: Default::default(),
+            blackout: false,
+            lights: Vec::new(),
         }
     }
 
@@ -146,10 +153,9 @@ impl Engine {
         let fs = 48000.0;
         let mut analyzer = Analyzer::new(fs);
         analyzer.wake = Some(self.wake.clone());
-        self.set_audio(AudioSource::Demo {
-            beat: DemoBeat::new(fs, self.comp.bpm as f32),
-            analyzer,
-        });
+        let mut beat = DemoBeat::new(fs, self.comp.bpm as f32);
+        beat.arranged = true;
+        self.set_audio(AudioSource::Demo { beat, analyzer });
     }
 
     fn period(&self) -> Duration {
@@ -248,36 +254,91 @@ impl Engine {
         // test overrides everything.
         let stage = self.comp.strip_stage();
         let test = self.test.filter(|t| t.fixture < self.output.fixtures.len()).map(|t| (t.fixture, t.step(), t.phase()));
-        self.dmx = if stage.is_empty() && test.is_none() {
-            self.output.render_dmx(&self.frame)
-        } else {
-            self.output.render_dmx_by(&self.frame, &move |p, sampled| {
-                let Some((fixture, step, k)) = test else {
-                    return stage.shade(sampled, p);
-                };
-                let (fi, i, n) = (p.fixture, p.index, p.count);
-                if fi != fixture {
-                    return Rgba::BLACK;
+        // Layers aimed at groups: every distinct set of targeted groups a
+        // fixture is in gets its own picture.
+        let targeted = self.comp.targeted_groups();
+        let n_fix = self.output.fixtures.len();
+        let mut frames: Vec<Frame> = Vec::new();
+        let mut frame_of = vec![usize::MAX; n_fix];
+        let mut members: std::collections::HashMap<String, Vec<usize>> = Default::default();
+        if !targeted.is_empty() {
+            let areas: Vec<Option<[f32; 4]>> = targeted.iter().map(|g| self.output.group_area(g)).collect();
+            for g in &targeted {
+                members.insert(g.clone(), self.output.group_members(g));
+            }
+            let mut keys: Vec<Vec<usize>> = Vec::new();
+            for (fi, fx) in self.output.fixtures.iter().enumerate() {
+                let key: Vec<usize> = (0..targeted.len()).filter(|&k| fx.groups.contains(&targeted[k])).collect();
+                if key.is_empty() {
+                    continue;
                 }
-                match step {
-                    TestStep::Red => Rgba::rgb(1.0, 0.0, 0.0),
-                    TestStep::Green => Rgba::rgb(0.0, 1.0, 0.0),
-                    TestStep::Blue => Rgba::rgb(0.0, 0.0, 1.0),
-                    TestStep::White => Rgba::rgb(1.0, 1.0, 1.0),
-                    TestStep::Run => {
-                        // A short white dot travelling in wiring order, first pixel stays red.
-                        let pos = (k * n as f32) as usize;
-                        if i == 0 {
-                            Rgba::rgb(1.0, 0.0, 0.0)
-                        } else if i.abs_diff(pos) <= (n / 40).max(1) {
-                            Rgba::rgb(1.0, 1.0, 1.0)
-                        } else {
-                            Rgba::BLACK
+                let idx = match keys.iter().position(|k| *k == key) {
+                    Some(i) => i,
+                    None => {
+                        let frame = self.comp.render_with(&|g| targeted.iter().position(|t| t == g).filter(|k| key.contains(k)).and_then(|k| areas[k]));
+                        keys.push(key);
+                        frames.push(frame);
+                        keys.len() - 1
+                    }
+                };
+                frame_of[fi] = idx;
+            }
+        }
+        let lights = std::cell::RefCell::new(
+            self.output
+                .fixtures
+                .iter()
+                .map(|f| vec![[0u8; 3]; self.output.types.get(f.type_id).map(|t| t.pixel_count()).unwrap_or(0)])
+                .collect::<Vec<_>>(),
+        );
+        let blackout = self.blackout;
+        let fixtures = &self.output.fixtures;
+        let main = &self.frame;
+        self.dmx = self.output.render_dmx_each(&|fi| frames.get(frame_of[fi]).unwrap_or(main), &|p, sampled| {
+            let c = match test {
+                None if blackout => Rgba::BLACK,
+                None if stage.is_empty() => sampled,
+                None => {
+                    let groups = &fixtures[p.fixture].groups;
+                    stage.shade_in(sampled, p, &|g| {
+                        if !groups.iter().any(|x| x == g) {
+                            return None;
+                        }
+                        let m = members.get(g)?;
+                        Some((m.iter().position(|&i| i == p.fixture)?, m.len()))
+                    })
+                }
+                Some((fixture, step, k)) => {
+                    let (fi, i, n) = (p.fixture, p.index, p.count);
+                    if fi != fixture {
+                        Rgba::BLACK
+                    } else {
+                        match step {
+                            TestStep::Red => Rgba::rgb(1.0, 0.0, 0.0),
+                            TestStep::Green => Rgba::rgb(0.0, 1.0, 0.0),
+                            TestStep::Blue => Rgba::rgb(0.0, 0.0, 1.0),
+                            TestStep::White => Rgba::rgb(1.0, 1.0, 1.0),
+                            TestStep::Run => {
+                                // A short white dot travelling in wiring order, first pixel stays red.
+                                let pos = (k * n as f32) as usize;
+                                if i == 0 {
+                                    Rgba::rgb(1.0, 0.0, 0.0)
+                                } else if i.abs_diff(pos) <= (n / 40).max(1) {
+                                    Rgba::rgb(1.0, 1.0, 1.0)
+                                } else {
+                                    Rgba::BLACK
+                                }
+                            }
                         }
                     }
                 }
-            })
-        };
+            };
+            if let Some(px) = lights.borrow_mut().get_mut(p.fixture).and_then(|l| l.get_mut(p.index)) {
+                *px = c.to_u8();
+            }
+            c
+        });
+        self.lights = lights.into_inner();
         if let Some(sw) = &self.sweep {
             if let Some(l) = self.output.lumiverses.get(sw.lumiverse) {
                 let base = l.universe;

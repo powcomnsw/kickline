@@ -61,6 +61,16 @@ rig.
 </tr>
 <tr>
 <td valign="top">
+<h3>Knows where you are in the track</h3>
+<p>Kickline listens for the <b>groove, melodic parts, build-ups, the pause before the drop and the drop</b>. Give each one a look (which clip every layer plays, the colours, the brightness) and turn on <b>Auto looks</b>: the lights change on the beat when the song does.</p>
+</td>
+<td valign="top">
+<h3>Groups and your controller</h3>
+<p>Put fixtures in <b>groups</b> (left panel, centre matrix, triangle…) and aim any layer at one: a sweep runs across just that group. Tell it your <b>controller</b> (H807SA and others) and how many LEDs are on each output, and it sets the universes up the way the controller counts.</p>
+</td>
+</tr>
+<tr>
+<td valign="top">
 <h3>1,781 fixtures built in</h3>
 <p>The full QLC+ fixture library, searchable, with every channel explained. Missing one? Drop a <code>.qxf</code> from the Open Fixture Library onto the window.</p>
 </td>
@@ -75,12 +85,12 @@ rig.
 
 | | |
 |---|---|
-| ![Advanced Output](docs/screenshots/advanced-output.png) | ![Array tool](docs/screenshots/array.png) |
-| **Advanced Output**: lumiverses and fixtures placed on the canvas, with live pixel colours | **Add array**: eight zig-zag strips, each on its own universe |
-| ![Colour palettes](docs/screenshots/palettes.png) | ![Fixture library](docs/screenshots/fixture-library.png) |
-| **Palettes**: a clip set to palette colour 2, ready to follow palette changes | **Fixture library**: shows what each channel of a fixture does |
-| ![Audio](docs/screenshots/audio.png) | ![Diagnostics](docs/screenshots/diagnostics.png) |
-| **Audio**: bands, kick/snare/hat, Ableton Link and timing | **Diagnostics**: one-click checks and a report you can send |
+| ![Play](docs/screenshots/play.png) | ![Effect browser](docs/screenshots/effect-browser.png) |
+| **Play**: layers aimed at groups, what the lights get, the song section and the song so far | **Effect browser**: live tiles by kind, colour picked on its own |
+| ![Layer settings](docs/screenshots/layer-settings.png) | ![Stage](docs/screenshots/stage.png) |
+| **Layer settings**: which group it lights, and its clip in each part of the song | **Set up → Stage**: groups, looks per section, stage profiles |
+| ![Controller](docs/screenshots/controller.png) | ![Song sections](docs/screenshots/music-sections.png) |
+| **Add a controller**: an H807SA with LEDs per output, addressed for you | **Set up → Music**: the sections Kickline heard in the demo track |
 
 ## Quick start
 
@@ -90,9 +100,14 @@ rig.
 2. **Setup guide.** It opens the first time: it finds your controller, asks what
    lights you have (strips, panels or anything from the library), then lets you
    **test each light** for colour order and wiring direction. About five minutes.
-3. **Sound.** Open **Audio** and click **Use rekordbox (direct)**. With no music
-   playing, **Demo beat** works too.
-4. **Play.** Click clips and palettes. Your show **saves by itself**, and **⌘Z** undoes anything.
+3. **Sound.** In **Set up → Music**, click **Use rekordbox (direct)**. With no music
+   playing, **Demo beat** works too (it plays a little track with a build-up and a drop).
+4. **Play.** Click clips and palettes; **+** in an empty slot opens the effect browser,
+   **⋯** on a layer opens its settings. Your show **saves by itself**, and **⌘Z** undoes anything.
+
+Two screens: **Play** for the show, **Set up** for outputs, the stage (groups,
+looks, stage profiles), the fixture library, music, DMX values and diagnostics.
+To try everything at once: **Set up → Stage → Start a show from the example stage**.
 
 ## Saving your show
 

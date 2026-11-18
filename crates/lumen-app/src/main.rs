@@ -10,10 +10,11 @@ mod link;
 mod log;
 mod paths;
 mod project;
+mod stage;
 mod theme;
 mod util;
 
-use eframe::egui::{self, Color32, Sense, Stroke, Vec2};
+use eframe::egui::{self, Color32, Sense, Vec2};
 use engine::{AudioSource, Engine};
 use lumen_audio::{AppInfo, AudioInput, DeviceInfo};
 use std::ops::{Deref, DerefMut};
@@ -21,6 +22,51 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 
+/// Play: performing. Set up: outputs, fixtures, groups, music, diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Play,
+    Setup,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Page {
+    Output,
+    Stage,
+    Library,
+    Music,
+    Dmx,
+    Diagnostics,
+}
+
+impl Page {
+    const ALL: [Page; 6] = [Page::Output, Page::Stage, Page::Library, Page::Music, Page::Dmx, Page::Diagnostics];
+
+    fn name(self) -> &'static str {
+        match self {
+            Page::Output => "Output",
+            Page::Stage => "Stage",
+            Page::Library => "Fixture library",
+            Page::Music => "Music",
+            Page::Dmx => "DMX values",
+            Page::Diagnostics => "Diagnostics",
+        }
+    }
+
+    fn note(self) -> &'static str {
+        match self {
+            Page::Output => "Controllers, universes and where each fixture sits",
+            Page::Stage => "Groups, looks for each part of a song, stage profiles",
+            Page::Library => "Fixture types: search thousands, or make your own",
+            Page::Music => "Audio input and drum detection",
+            Page::Dmx => "Every channel being sent, live",
+            Page::Diagnostics => "Network checks, log and reports",
+        }
+    }
+}
+
+/// Buttons all over the app open a "window" by setting one of these; the
+/// shell turns that into the matching Set up page.
 pub struct Windows {
     pub advanced_output: bool,
     pub fixture_editor: bool,
@@ -51,6 +97,10 @@ pub struct LumenApp {
     /// The open show: file, undo history, autosave.
     pub session: project::Session,
     pub guide: guide::Guide,
+    pub mode: Mode,
+    pub page: Page,
+    pub play: clips::State,
+    pub stage: stage::State,
 }
 
 /// What every UI function gets: the locked engine (`app.e`) plus UI state
@@ -101,6 +151,10 @@ impl LumenApp {
             nodes: lumen_output::NodeWatcher::start(),
             session: project::Session::new(path, first_run),
             guide: guide::Guide::starting(first_run),
+            mode: Mode::Play,
+            page: Page::Output,
+            play: Default::default(),
+            stage: Default::default(),
         }
     }
 }
@@ -130,9 +184,32 @@ impl View<'_> {
         self.e.wake.clone()
     }
 
+    /// Buttons anywhere can still "open a window": go to that Set up page.
+    fn route_windows(&mut self) {
+        let w = &mut self.s.windows;
+        let page = if w.advanced_output {
+            Some(Page::Output)
+        } else if w.fixture_editor {
+            Some(Page::Library)
+        } else if w.audio {
+            Some(Page::Music)
+        } else if w.dmx_monitor {
+            Some(Page::Dmx)
+        } else if w.diagnostics {
+            Some(Page::Diagnostics)
+        } else {
+            None
+        };
+        *w = Windows { advanced_output: false, fixture_editor: false, dmx_monitor: false, audio: false, diagnostics: false };
+        if let Some(p) = page {
+            self.s.page = p;
+            self.s.mode = Mode::Setup;
+        }
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let t = theme::current();
-        ui.add_space(4.0);
+        ui.add_space(5.0);
         ui.horizontal(|ui| {
             // Tempo
             let synced = self.e.link_status.as_ref().is_some_and(|s| s.peers > 0);
@@ -147,14 +224,20 @@ impl View<'_> {
                 "This build was made without Ableton Link"
             });
             util::beat_dots(ui, self.e.comp.beat);
-            ui.add_space(14.0);
+            ui.add_space(10.0);
             ui.label(egui::RichText::new("Master").color(t.weak));
-            ui.spacing_mut().slider_width = 130.0;
+            ui.spacing_mut().slider_width = 110.0;
             ui.add(egui::Slider::new(&mut self.e.comp.master, 0.0..=1.0).show_value(false));
-            ui.add_space(14.0);
+            let bo = self.e.blackout;
+            let b = egui::Button::new(egui::RichText::new("Blackout").font(theme::bold(t.text_size - 1.0)).color(if bo { Color32::WHITE } else { t.weak }))
+                .fill(if bo { t.err } else { t.raised });
+            if ui.add(b).on_hover_text("All lights dark, instantly (B)").clicked() {
+                self.e.blackout = !bo;
+            }
+            ui.add_space(6.0);
             let on = self.e.output_enabled;
             let dead = self.e.health.state(on) == engine::OutputState::Dead;
-            let label = egui::RichText::new(if dead { "DMX  DEAD" } else if on { "DMX OUT  ON" } else { "DMX OUT  OFF" }).font(theme::bold(t.text_size - 1.0));
+            let label = egui::RichText::new(if dead { "DMX  DEAD" } else if on { "DMX ON" } else { "DMX OFF" }).font(theme::bold(t.text_size - 1.0));
             let b = egui::Button::new(if on { label.color(t.on_accent) } else { label.color(t.weak) }).fill(if dead { t.err } else if on { t.accent } else { t.raised });
             if ui.add(b).on_hover_text("Send to your lights").clicked() {
                 self.e.output_enabled = !on;
@@ -169,21 +252,152 @@ impl View<'_> {
                 if ui.add_enabled(can_undo, egui::Button::new("↶")).on_hover_text("Undo (⌘Z)").clicked() {
                     project::undo_step(self);
                 }
-                ui.add_space(12.0);
-                let (_, errs) = log::counts();
-                // Short labels when the window is narrow, so nothing overlaps.
-                let compact = ui.available_width() < 560.0;
-                let w = &mut self.s.windows;
-                let diag_name = if compact { "Diag." } else { "Diagnostics" };
-                let diag = if errs > 0 { format!("{diag_name} ({errs})") } else { diag_name.into() };
-                ui.toggle_value(&mut w.diagnostics, diag).on_hover_text("Diagnostics");
-                ui.toggle_value(&mut w.audio, "Audio");
-                ui.toggle_value(&mut w.dmx_monitor, if compact { "DMX" } else { "DMX Monitor" }).on_hover_text("DMX Monitor");
-                ui.toggle_value(&mut w.fixture_editor, "Fixtures");
-                ui.toggle_value(&mut w.advanced_output, if compact { "Output" } else { "Advanced Output" }).on_hover_text("Advanced Output");
+                ui.add_space(10.0);
+                // Play | Set up
+                for (m, name) in [(Mode::Setup, "Set up"), (Mode::Play, "Play")] {
+                    let sel = self.s.mode == m;
+                    let b = egui::Button::new(egui::RichText::new(name).font(theme::bold(t.text_size)).color(if sel { t.on_accent } else { t.weak }))
+                        .fill(if sel { t.accent } else { t.raised })
+                        .min_size(Vec2::new(70.0, 26.0));
+                    if ui.add(b).clicked() {
+                        self.s.mode = m;
+                    }
+                }
+                ui.add_space(10.0);
+                self.output_badge(ui);
             });
         });
+        ui.add_space(5.0);
+    }
+
+    /// Play screen, right side: the inspector when something is selected,
+    /// otherwise what the lights get, the music and the outputs.
+    fn play_side(&mut self, ui: &mut egui::Ui) {
+        let groups = self.e.output.group_names();
+        if self.s.play.inspect.is_some() {
+            if !clips::inspector(self, ui, &groups) {
+                self.s.play.inspect = None;
+                self.s.play.browsing = false;
+            }
+            return;
+        }
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.add_space(6.0);
+            card(ui, "What the lights get", |ui| {
+                let w = ui.available_width();
+                stage::paint_lights(ui, self, Vec2::new(w, w), &|_| None);
+                let t = theme::current();
+                let n = self.e.output.fixtures.len();
+                let px: usize = self.e.lights.iter().map(|l| l.len()).sum();
+                ui.label(egui::RichText::new(format!("{n} fixtures · {px} pixels · {} universes", self.e.dmx.len())).color(t.weak).size(t.text_size - 2.0));
+            });
+            card(ui, "Music", |ui| self.music_card(ui));
+            card(ui, "Lights", |ui| self.lights_card(ui));
+        });
+    }
+
+    fn music_card(&mut self, ui: &mut egui::Ui) {
+        let t = theme::current();
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(self.e.audio.label()).color(t.weak));
+            util::hit_dots(ui, &self.e.bands);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Audio…").clicked() {
+                    self.s.windows.audio = true;
+                }
+            });
+        });
+        if let Some(st) = &self.e.link_status {
+            if st.peers > 0 {
+                ui.colored_label(t.ok, format!("Link: {} peer(s), {:.1} BPM", st.peers, st.tempo));
+            } else {
+                ui.colored_label(t.warn, "Link: waiting for rekordbox");
+            }
+        }
         ui.add_space(4.0);
+        stage::section_card(self, ui, false);
+        stage::timeline(self, ui);
+    }
+
+    fn lights_card(&mut self, ui: &mut egui::Ui) {
+        let t = theme::current();
+        if let Some(tst) = self.e.test {
+            let name = self.e.output.fixtures.get(tst.fixture).map(|f| f.name.clone()).unwrap_or_default();
+            ui.horizontal(|ui| {
+                ui.colored_label(t.warn, format!("Testing {name}"));
+                if ui.small_button("Stop test").clicked() {
+                    self.e.test = None;
+                }
+            });
+        }
+        let seen = self.nodes.nodes();
+        for i in 0..self.e.output.lumiverses.len() {
+            let l = &self.e.output.lumiverses[i];
+            let used = self.e.output.universes_used(i);
+            let (dot, note) = match advanced_output::node_status(&self.e.output, i, &seen) {
+                advanced_output::NodeStatus::Online(n) => (t.ok, format!("{} answering", n)),
+                advanced_output::NodeStatus::Lost { name, .. } => (t.err, format!("{name} not answering")),
+                _ if self.e.output_enabled && l.enabled => (t.accent, "sending".to_string()),
+                _ => (t.line, if l.enabled { "output off".to_string() } else { "disabled".to_string() }),
+            };
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("●").color(dot));
+                ui.label(&l.name);
+                let unis = if used.is_empty() { "no fixtures".to_string() } else { format!("U{}", engine::universe_ranges(used)) };
+                ui.label(egui::RichText::new(format!("{unis} · {note}")).color(t.weak).size(t.text_size - 2.0));
+            });
+        }
+        if self.e.output.lumiverses.is_empty() {
+            ui.weak("No outputs yet.");
+        }
+        if ui.small_button("Set up outputs…").clicked() {
+            self.s.mode = Mode::Setup;
+            self.s.page = Page::Output;
+        }
+    }
+
+    /// Set up: the list of pages on the left.
+    fn setup_nav(&mut self, ui: &mut egui::Ui) {
+        let t = theme::current();
+        ui.add_space(10.0);
+        let (_, errs) = log::counts();
+        for p in Page::ALL {
+            let sel = self.s.page == p;
+            let name = if p == Page::Diagnostics && errs > 0 { format!("{} ({errs})", p.name()) } else { p.name().to_string() };
+            let r = egui::Frame::new()
+                .fill(if sel { t.raised } else { Color32::TRANSPARENT })
+                .corner_radius(t.radius)
+                .inner_margin(egui::Margin::symmetric(10, 7))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(egui::RichText::new(name).font(theme::bold(t.text_size)).color(if sel { t.text } else { t.weak }));
+                    ui.label(egui::RichText::new(p.note()).color(t.weak).size(t.text_size - 3.0));
+                })
+                .response
+                .interact(Sense::click());
+            if sel {
+                let r = r.rect;
+                ui.painter().rect_filled(egui::Rect::from_min_size(r.min, Vec2::new(3.0, r.height())), 1.0, t.accent);
+            }
+            if r.clicked() {
+                self.s.page = p;
+            }
+            ui.add_space(2.0);
+        }
+    }
+
+    fn setup_page(&mut self, ui: &mut egui::Ui) {
+        match self.s.page {
+            Page::Output => advanced_output::ui(self, ui),
+            Page::Stage => stage::ui(self, ui),
+            Page::Library => fixture_editor::ui(self, ui),
+            Page::Music => {
+                stage::music_sections(self, ui);
+                audio_panel::ui(self, ui);
+            }
+            Page::Dmx => dmx_monitor::ui(self, ui),
+            Page::Diagnostics => diagnostics::ui(self, ui),
+        }
     }
 
     /// Output health: an unmissable badge, then universes, rate and count.
@@ -313,115 +527,18 @@ impl View<'_> {
         }
     }
 
-    fn status_bar(&mut self, ui: &mut egui::Ui) {
-        let t = theme::current();
-        ui.horizontal(|ui| {
-            self.output_badge(ui);
-            if let Some(tst) = self.e.test {
-                let name = self.e.output.fixtures.get(tst.fixture).map(|f| f.name.clone()).unwrap_or_default();
-                ui.separator();
-                ui.colored_label(t.warn, format!("Testing {name}: other lights are dark"));
-                if ui.small_button("Stop test").clicked() {
-                    self.e.test = None;
-                }
-            }
-            if self.e.output_enabled {
-                let seen = self.nodes.nodes();
-                let mut lost = Vec::new();
-                let mut online = 0;
-                for i in 0..self.e.output.lumiverses.len() {
-                    match advanced_output::node_status(&self.e.output, i, &seen) {
-                        advanced_output::NodeStatus::Lost { name, .. } => lost.push(format!("{} ({name})", self.e.output.lumiverses[i].name)),
-                        advanced_output::NodeStatus::Online(_) => online += 1,
-                        _ => {}
-                    }
-                }
-                ui.separator();
-                if !lost.is_empty() {
-                    ui.colored_label(t.err, format!("Node not answering: {}", lost.join(", ")))
-                        .on_hover_text("Kickline keeps sending. Check the node's power and cable.");
-                } else if online > 0 {
-                    let n = seen.iter().filter(|n| n.online()).count();
-                    ui.colored_label(t.ok, format!("{n} node(s) answering"));
-                }
-            }
-            ui.separator();
-            ui.label(egui::RichText::new(format!("Audio: {}", self.e.audio.label())).color(t.weak));
-            util::hit_dots(ui, &self.e.bands);
-            if let Some(st) = &self.e.link_status {
-                ui.separator();
-                if st.peers > 0 {
-                    ui.colored_label(t.ok, format!("Link: {} peer(s), {:.1} BPM", st.peers, st.tempo));
-                } else {
-                    ui.colored_label(t.warn, "Link: waiting for rekordbox");
-                }
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut i = theme::index();
-                egui::ComboBox::from_id_salt("theme").selected_text(theme::PRESETS[i].name).show_ui(ui, |ui| {
-                    for (k, th) in theme::PRESETS.iter().enumerate() {
-                        ui.selectable_value(&mut i, k, th.name).on_hover_text(th.note);
-                    }
-                });
-                if i != theme::index() {
-                    theme::choose(ui.ctx(), i);
-                }
-                ui.label(egui::RichText::new("Theme").color(t.weak));
-            });
-        });
-    }
+}
 
-    fn preview(&mut self, ui: &mut egui::Ui) {
-        let t = theme::current();
-        ui.add_space(6.0);
-        ui.label(egui::RichText::new("Composition").font(theme::bold(t.text_size)));
-        let w = ui.available_width();
-        let frame = &self.e.frame;
-        let aspect = frame.width as f32 / frame.height as f32;
-        let (resp, painter) = ui.allocate_painter(Vec2::new(w, w / aspect), Sense::hover());
-        util::paint_frame(&painter, resp.rect, frame);
-        let aspect = self.e.output.aspect;
-        // Strip clips aren't part of the picture: show them as the pixels the
-        // lights will actually get.
-        let stage = self.e.comp.strip_stage();
-        if !stage.is_empty() {
-            let n = self.e.output.fixtures.len();
-            let dark = painter.clone();
-            dark.rect_filled(resp.rect, 0.0, Color32::from_black_alpha(150));
-            for (fi, fx) in self.e.output.fixtures.iter().enumerate() {
-                let Some(ty) = self.e.output.types.get(fx.type_id) else { continue };
-                let cells = fx.pixel_local(ty);
-                let pos = fx.pixel_positions(aspect, ty);
-                let count = cells.len();
-                let r = (resp.rect.width() / 260.0).clamp(1.2, 3.5);
-                for (i, ((lx, ly), (u, v))) in cells.iter().zip(pos).enumerate() {
-                    let base = fx.sample_cell(aspect, ty, frame, *lx, *ly);
-                    let p = lumen_core::StripPixel { fixture: fi, fixtures: n, index: i, count, x: lx + 0.5, y: ly + 0.5 };
-                    let c = stage.shade(base, p);
-                    let col = Color32::from_rgb((c.r.clamp(0.0, 1.0) * 255.0) as u8, (c.g.clamp(0.0, 1.0) * 255.0) as u8, (c.b.clamp(0.0, 1.0) * 255.0) as u8);
-                    painter.circle_filled(util::to_screen(resp.rect, u, v), r, col);
-                }
-            }
-        }
-        for fx in &self.e.output.fixtures {
-            let pts: Vec<_> = fx
-                .corners(aspect)
-                .iter()
-                .map(|&(u, v)| util::to_screen(resp.rect, u, v))
-                .collect();
-            painter.add(egui::Shape::closed_line(
-                pts,
-                Stroke::new(1.0, Color32::from_white_alpha(140)),
-            ));
-        }
-        ui.add_space(6.0);
-        ui.label(format!(
-            "{} fixtures on {} lumiverse(s), {} universe(s) in use",
-            self.e.output.fixtures.len(),
-            self.e.output.lumiverses.len(),
-            self.e.dmx.len()
-        ));
-    }
+/// A titled card on the Play screen's side.
+fn card(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let t = theme::current();
+    egui::Frame::new().fill(t.panel).corner_radius(t.radius + 2).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new(title).font(theme::bold(t.text_size)));
+        ui.add_space(4.0);
+        add(ui);
+    });
+    ui.add_space(8.0);
 }
 
 impl eframe::App for LumenApp {
@@ -455,64 +572,47 @@ impl eframe::App for LumenApp {
             }
         }
 
+        v.route_windows();
         // Poll for nodes while output is on or the patch is open.
-        v.s.nodes.set_active(v.e.output_enabled || v.s.windows.advanced_output || v.s.guide.wants_nodes());
-        let was_open = [v.windows.advanced_output, v.windows.fixture_editor, v.windows.dmx_monitor, v.windows.audio, v.windows.diagnostics];
-        egui::Panel::top("top").show(ui, |ui| v.top_bar(ui));
-        egui::Panel::bottom("status").show(ui, |ui| v.status_bar(ui));
-        egui::Panel::right("preview").default_size(380.0).resizable(true).show(ui, |ui| v.preview(ui));
-        egui::CentralPanel::default().show(ui, |ui| clips::ui(&mut v, ui));
-
-        let mut open = v.windows.advanced_output;
-        egui::Window::new("Advanced Output")
-            .open(&mut open)
-            .default_pos([20.0, 70.0])
-            .default_size([980.0, 640.0])
-            .show(&ctx, |ui| advanced_output::ui(&mut v, ui));
-        v.windows.advanced_output = open;
-
-        let mut open = v.windows.fixture_editor;
-        egui::Window::new("Fixture Editor")
-            .open(&mut open)
-            .default_pos([120.0, 110.0])
-            .default_size([900.0, 640.0])
-            .show(&ctx, |ui| fixture_editor::ui(&mut v, ui));
-        v.windows.fixture_editor = open;
-
-        let mut open = v.windows.dmx_monitor;
-        egui::Window::new("DMX Monitor")
-            .open(&mut open)
-            .default_pos([200.0, 150.0])
-            .default_size([700.0, 460.0])
-            .show(&ctx, |ui| dmx_monitor::ui(&mut v, ui));
-        v.windows.dmx_monitor = open;
-
-        let mut open = v.windows.audio;
-        egui::Window::new("Audio")
-            .open(&mut open)
-            .default_pos([300.0, 70.0])
-            .default_size([520.0, 700.0])
-            .show(&ctx, |ui| audio_panel::ui(&mut v, ui));
-        v.windows.audio = open;
-
-        let mut open = v.windows.diagnostics;
-        egui::Window::new("Diagnostics")
-            .open(&mut open)
-            .default_pos([180.0, 70.0])
-            .default_size([760.0, 680.0])
-            .show(&ctx, |ui| diagnostics::ui(&mut v, ui));
-        v.windows.diagnostics = open;
-
-        guide::ui(&mut v, &ctx);
-        recent_card(&mut v, &ctx);
-
-        // A window that was just opened (from a button anywhere) always comes to the front.
-        let now_open = [v.windows.advanced_output, v.windows.fixture_editor, v.windows.dmx_monitor, v.windows.audio, v.windows.diagnostics];
-        for (i, title) in ["Advanced Output", "Fixture Editor", "DMX Monitor", "Audio", "Diagnostics"].iter().enumerate() {
-            if now_open[i] && !was_open[i] {
-                ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, egui::Id::unique(*title)));
+        let patching = v.mode == Mode::Setup && matches!(v.page, Page::Output | Page::Diagnostics);
+        v.s.nodes.set_active(v.e.output_enabled || patching || v.s.guide.wants_nodes());
+        if !ctx.egui_wants_keyboard_input() {
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                v.s.play.inspect = None;
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::B) && !i.modifiers.command) {
+                v.e.blackout = !v.e.blackout;
             }
         }
+        egui::Panel::top("top").show(ui, |ui| v.top_bar(ui));
+        match v.mode {
+            Mode::Play => {
+                egui::Panel::right("play_side").exact_size(340.0).resizable(false).show(ui, |ui| v.play_side(ui));
+                egui::CentralPanel::default().show(ui, |ui| clips::ui(&mut v, ui));
+            }
+            Mode::Setup => {
+                egui::Panel::left("nav").exact_size(200.0).resizable(false).show(ui, |ui| {
+                    v.setup_nav(ui);
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                        ui.add_space(8.0);
+                        let mut i = theme::index();
+                        egui::ComboBox::from_id_salt("theme").selected_text(theme::PRESETS[i].name).show_ui(ui, |ui| {
+                            for (k, th) in theme::PRESETS.iter().enumerate() {
+                                ui.selectable_value(&mut i, k, th.name).on_hover_text(th.note);
+                            }
+                        });
+                        if i != theme::index() {
+                            theme::choose(ui.ctx(), i);
+                        }
+                        ui.weak("Theme");
+                    });
+                });
+                egui::CentralPanel::default().show(ui, |ui| v.setup_page(ui));
+            }
+        }
+        guide::ui(&mut v, &ctx);
+        recent_card(&mut v, &ctx);
+        v.route_windows();
         drop(guard);
         // The preview only needs ~30 fps; DMX timing is the engine thread's job.
         ctx.request_repaint_after(Duration::from_millis(30));
@@ -681,6 +781,38 @@ fn apply_args(app: &mut LumenApp, args: &[String]) {
             }
         } else if let Some(s) = arg.strip_prefix("--export-report-after=") {
             v.s.export_after = s.parse().ok();
+        } else if arg == "--example-stage" {
+            project::new_show_from(&mut v, "DJ stage", stage::example_show());
+        } else if let Some(p) = arg.strip_prefix("--page=") {
+            v.s.mode = Mode::Setup;
+            v.s.page = match p {
+                "stage" => Page::Stage,
+                "library" => Page::Library,
+                "music" => Page::Music,
+                "dmx" => Page::Dmx,
+                "diagnostics" => Page::Diagnostics,
+                _ => Page::Output,
+            };
+        } else if let Some(x) = arg.strip_prefix("--inspect=") {
+            let nums: Vec<usize> = x.split([':', ',']).filter_map(|n| n.parse().ok()).collect();
+            v.s.play.inspect = match (x.split(':').next(), nums.as_slice()) {
+                (Some("layer"), [l]) => Some(clips::Inspect::Layer(*l)),
+                (Some("clip"), [l, c]) => Some(clips::Inspect::Clip(*l, *c)),
+                (Some("browse"), [l, c]) => {
+                    v.s.play.browsing = true;
+                    Some(clips::Inspect::Clip(*l, *c))
+                }
+                (Some("palette"), _) => Some(clips::Inspect::Palette),
+                _ => None,
+            };
+        } else if let Some(n) = arg.strip_prefix("--category=") {
+            v.s.play.category = n.parse().unwrap_or(0);
+        } else if arg == "--controller" {
+            let mut cs = lumen_fixtures::ControllerSetup::new(0, 0);
+            cs.leds = vec![512, 512, 512, 180, 120, 0, 0, 0];
+            v.s.ao.controller = Some(cs);
+        } else if arg == "--blackout" {
+            v.e.blackout = true;
         } else if arg == "--test-crash" {
             panic!("test crash requested with --test-crash");
         }

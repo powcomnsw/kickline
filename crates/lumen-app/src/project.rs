@@ -277,6 +277,7 @@ fn switch_to(v: &mut View, path: PathBuf, p: Project) {
     v.e.output = p.output;
     v.s.ao = Default::default();
     v.s.fe = Default::default();
+    v.s.play = Default::default();
     v.s.session.path = path;
     let now = snapshot(v);
     v.s.session.reset(&now);
@@ -324,6 +325,16 @@ pub fn new_show(v: &mut View) {
     output.lumiverses = vec![lumen_fixtures::Lumiverse::new("Lumiverse 1", 0)];
     let p = Project { composition: Composition::demo(), output };
     let path = fresh_path("Untitled show");
+    switch_to(v, path, p);
+    save_now(v);
+    v.e.status = format!("New show: {}", v.s.session.name());
+    log::info("project", v.e.status.clone());
+}
+
+/// A new show file, starting from `p`.
+pub fn new_show_from(v: &mut View, name: &str, p: Project) {
+    save_now(v);
+    let path = fresh_path(name);
     switch_to(v, path, p);
     save_now(v);
     v.e.status = format!("New show: {}", v.s.session.name());

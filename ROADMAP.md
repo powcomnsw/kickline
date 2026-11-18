@@ -92,9 +92,16 @@ Key decisions:
 - [x] Reverse, mirror (from the middle), ripple across strips; palette colours; audio triggers
 - [ ] Strip effects in Advanced Output's "Show pixel colours"
 
-## Next: decluttered screens (agreed, not built)
+## Decluttered screens, groups and song sections (v0.11, done)
 
-- [ ] Play / Set up modes with an inspector panel: see [docs/design/ui-redesign.md](docs/design/ui-redesign.md)
+- [x] Play / Set up modes with an inspector panel ([design](docs/design/ui-redesign.md)); no floating windows
+- [x] Blackout button (and the B key); preview shows exactly what each pixel is sent
+- [x] Effect browser with live tiles, colour picked separately; new effects: radar, left↔right, up↕down, sweep in/out, wipe, beat pulse, twinkle
+- [x] Groups ("slices"): aim any layer at a group; effects spread across the group's area, strip effects ripple across its fixtures
+- [x] Controller-aware addressing: pick H807SA / H802RA / H803SA / generic, enter LEDs per output, Kickline addresses it the way the controller counts
+- [x] Song sections from the music (groove, melodic, build-up, pause, drop) with per-section looks switched on the beat
+- [x] Stage profiles: rig + groups + colours + looks in one file; an example DJ stage (2 panels, matrix, triangle, square)
+- [ ] Sections from rekordbox's own analysis (needs Pro DJ Link from CDJs; rekordbox doesn't share it with other apps)
 
 ## Known limitations of v0.6
 - Imported moving heads light up but don't move yet: pan/tilt are held centred.

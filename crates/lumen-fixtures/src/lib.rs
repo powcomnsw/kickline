@@ -367,6 +367,9 @@ pub struct Fixture {
     /// How RGBW fixtures use their white emitter.
     #[serde(default)]
     pub white: WhiteMode,
+    /// Groups ("slices") this fixture is in, e.g. "Left panel", "Triangle".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
 }
 
 /// How a fixture with a white emitter makes white.
@@ -491,11 +494,14 @@ pub struct AdvancedOutput {
     pub lumiverses: Vec<Lumiverse>,
     pub types: Vec<FixtureType>,
     pub fixtures: Vec<Fixture>,
+    /// Group names in display order (fixtures carry their own tags too).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
 }
 
 impl Default for AdvancedOutput {
     fn default() -> Self {
-        AdvancedOutput { aspect: default_aspect(), lumiverses: Vec::new(), types: Vec::new(), fixtures: Vec::new() }
+        AdvancedOutput { aspect: default_aspect(), lumiverses: Vec::new(), types: Vec::new(), fixtures: Vec::new(), groups: Vec::new() }
     }
 }
 
@@ -521,6 +527,7 @@ impl AdvancedOutput {
             reverse: false,
             universe_offset: 0,
             white: Default::default(),
+            groups: Vec::new(),
         };
         o.fixtures.push(strip("Strip top", 0.62, 1));
         o.fixtures.push(strip("Strip bottom", 0.78, 181));
@@ -539,6 +546,7 @@ impl AdvancedOutput {
                 reverse: false,
                 universe_offset: 0,
                 white: Default::default(),
+                groups: Vec::new(),
             });
         }
         o.fixtures.push(Fixture {
@@ -555,6 +563,7 @@ impl AdvancedOutput {
             reverse: false,
             universe_offset: 0,
             white: Default::default(),
+            groups: Vec::new(),
         });
         o
     }
@@ -602,6 +611,17 @@ impl AdvancedOutput {
         frame: &Frame,
         f: &dyn Fn(StripPixel, Rgba) -> Rgba,
     ) -> BTreeMap<(usize, u16), [u8; UNIVERSE_SIZE]> {
+        self.render_dmx_each(&|_| frame, f)
+    }
+
+    /// Like `render_dmx_by`, but each fixture samples its own picture
+    /// (`frame_for(fixture index)`): fixtures in groups see the layers
+    /// aimed at their groups.
+    pub fn render_dmx_each<'a>(
+        &self,
+        frame_for: &dyn Fn(usize) -> &'a Frame,
+        f: &dyn Fn(StripPixel, Rgba) -> Rgba,
+    ) -> BTreeMap<(usize, u16), [u8; UNIVERSE_SIZE]> {
         let fixtures = self.fixtures.len();
         let at = |fi: usize, i: usize, n: usize, lx: f32, ly: f32| StripPixel {
             fixture: fi,
@@ -615,6 +635,7 @@ impl AdvancedOutput {
         let mut bytes = Vec::new();
         for (fi, fx) in self.fixtures.iter().enumerate() {
             let (Some(t), Some(lv)) = (self.types.get(fx.type_id), self.lumiverses.get(fx.lumiverse)) else { continue };
+            let frame = frame_for(fi);
             let segs = self.layout(fx);
             let cells = fx.pixel_local(t);
             let n = cells.len();
@@ -814,6 +835,125 @@ impl AdvancedOutput {
         out
     }
 
+    /// Every group: the listed ones first, then any other fixture tags.
+    pub fn group_names(&self) -> Vec<String> {
+        let mut out = self.groups.clone();
+        for f in &self.fixtures {
+            for g in &f.groups {
+                if !out.contains(g) {
+                    out.push(g.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// Fixtures in a group, left to right (then top to bottom): the order
+    /// strip effects ripple across it.
+    pub fn group_members(&self, group: &str) -> Vec<usize> {
+        let mut m: Vec<usize> = (0..self.fixtures.len()).filter(|&i| self.fixtures[i].groups.iter().any(|g| g == group)).collect();
+        m.sort_by(|&a, &b| {
+            let (fa, fb) = (&self.fixtures[a], &self.fixtures[b]);
+            fa.x.total_cmp(&fb.x).then(fa.y.total_cmp(&fb.y))
+        });
+        m
+    }
+
+    /// The part of the canvas a group covers (x0, y0, x1, y1).
+    pub fn group_area(&self, group: &str) -> Option<[f32; 4]> {
+        let mut a = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+        let mut any = false;
+        for f in self.fixtures.iter().filter(|f| f.groups.iter().any(|g| g == group)) {
+            for (u, v) in f.corners(self.aspect) {
+                a = [a[0].min(u), a[1].min(v), a[2].max(u), a[3].max(v)];
+                any = true;
+            }
+        }
+        any.then_some(a)
+    }
+
+    pub fn rename_group(&mut self, from: &str, to: &str) {
+        for g in self.groups.iter_mut().chain(self.fixtures.iter_mut().flat_map(|f| f.groups.iter_mut())) {
+            if g == from {
+                *g = to.to_string();
+            }
+        }
+    }
+
+    pub fn remove_group(&mut self, name: &str) {
+        self.groups.retain(|g| g != name);
+        for f in &mut self.fixtures {
+            f.groups.retain(|g| g != name);
+        }
+    }
+
+    /// What adding a controller would do, output by output.
+    pub fn controller_plan(&self, s: &ControllerSetup) -> Vec<PlanRow> {
+        let ppu = s.pixels_per_universe();
+        let base = self.lumiverses.get(s.lumiverse).map(|l| l.universe).unwrap_or(0);
+        s.leds
+            .iter()
+            .enumerate()
+            .map(|(i, &leds)| {
+                let need = leds.div_ceil(ppu) as u16;
+                let first = base + i as u16 * s.universes_per_output;
+                PlanRow { output: i + 1, leds, universes: (first, first + need.max(1) - 1), needed: need, fits: need <= s.universes_per_output && need <= s.max_universes() }
+            })
+            .collect()
+    }
+
+    /// Add one strip per controller output, addressed the way the
+    /// controller counts: output N starts on universe
+    /// base + (N - 1) x universes-per-output, channel 1.
+    pub fn add_controller(&mut self, s: &ControllerSetup) -> Result<std::ops::Range<usize>, String> {
+        let plan = self.controller_plan(s);
+        if let Some(bad) = plan.iter().find(|r| r.leds > 0 && !r.fits) {
+            return Err(format!(
+                "Output {} needs {} universes for {} LEDs, but each output has {} (the {} takes up to {})",
+                bad.output, bad.needed, bad.leds, s.universes_per_output, s.controller().name, s.max_universes()
+            ));
+        }
+        if self.lumiverses.get(s.lumiverse).is_none() {
+            return Err("Pick an output (lumiverse) first".into());
+        }
+        let order = if s.rgbw { "RGBW" } else { "RGB" };
+        let first = self.fixtures.len();
+        let used: Vec<(usize, usize)> = s.leds.iter().copied().enumerate().filter(|(_, n)| *n > 0).collect();
+        let rows = used.len().max(1);
+        let (x0, y0, x1, y1) = s.area;
+        for (k, (out, leds)) in used.into_iter().enumerate() {
+            let tname = format!("Pixel strip {leds} {order}");
+            let type_id = match self.types.iter().position(|t| t.name == tname) {
+                Some(i) => i,
+                None => {
+                    self.types.push(FixtureType::new(&tname, leds, 1, order));
+                    self.types.len() - 1
+                }
+            };
+            let pitch = (y1 - y0) / rows as f32;
+            self.fixtures.push(Fixture {
+                name: format!("{} out {}", s.name, out + 1),
+                type_id,
+                lumiverse: s.lumiverse,
+                address: 1,
+                x: (x0 + x1) / 2.0,
+                y: y0 + pitch * (k as f32 + 0.5),
+                w: x1 - x0,
+                h: (pitch * 0.6).min(0.04),
+                rotation: 0.0,
+                snake: false,
+                reverse: false,
+                universe_offset: out as u16 * s.universes_per_output,
+                white: WhiteMode::default(),
+                groups: vec![s.name.clone()],
+            });
+        }
+        if !self.groups.contains(&s.name) {
+            self.groups.push(s.name.clone());
+        }
+        Ok(first..self.fixtures.len())
+    }
+
     /// Lay out a row/column of identical fixtures in one go. Returns the new fixtures' indices.
     pub fn add_array(&mut self, spec: &ArraySpec) -> std::ops::Range<usize> {
         let first = self.fixtures.len();
@@ -852,6 +992,7 @@ impl AdvancedOutput {
                 reverse: spec.zigzag && i % 2 == 1,
                 universe_offset: uni,
                 white: WhiteMode::default(),
+                groups: Vec::new(),
             };
             // Never land on a universe another lumiverse already sends.
             let base = self.lumiverses.get(spec.lumiverse).map(|l| l.universe).unwrap_or(0);
@@ -937,6 +1078,91 @@ pub enum Addressing {
     UniversePerFixture,
 }
 
+/// A pixel controller Kickline knows how to address.
+#[derive(Clone, Copy, Debug)]
+pub struct Controller {
+    pub name: &'static str,
+    pub outputs: usize,
+    /// Most universes one output can take.
+    pub max_universes: u16,
+    pub note: &'static str,
+}
+
+pub const CONTROLLERS: &[Controller] = &[
+    Controller {
+        name: "H807SA",
+        outputs: 8,
+        max_universes: 6,
+        note: "8 outputs, up to 6 universes each (older units 4). In LED Edit, set the start universe and universes per port to match below.",
+    },
+    Controller { name: "H802RA", outputs: 4, max_universes: 4, note: "4 outputs, up to 680 RGB pixels (4 universes) each." },
+    Controller { name: "H803SA", outputs: 8, max_universes: 4, note: "8 outputs, up to 4 universes each." },
+    Controller { name: "Generic, 1 output", outputs: 1, max_universes: 32, note: "Any controller with one data output." },
+    Controller { name: "Generic, 2 outputs", outputs: 2, max_universes: 16, note: "Any controller with two data outputs." },
+    Controller { name: "Generic, 4 outputs", outputs: 4, max_universes: 16, note: "Any controller with four data outputs." },
+    Controller { name: "Generic, 8 outputs", outputs: 8, max_universes: 16, note: "Any controller with eight data outputs." },
+    Controller { name: "Generic, 16 outputs", outputs: 16, max_universes: 16, note: "Any controller with sixteen data outputs." },
+];
+
+/// "I have this controller with this many LEDs on each output."
+#[derive(Clone, Debug)]
+pub struct ControllerSetup {
+    /// Index into `CONTROLLERS`.
+    pub controller: usize,
+    pub name: String,
+    pub lumiverse: usize,
+    /// LEDs on each output (0 = nothing plugged in).
+    pub leds: Vec<usize>,
+    pub universes_per_output: u16,
+    pub rgbw: bool,
+    pub area: (f32, f32, f32, f32),
+}
+
+impl ControllerSetup {
+    pub fn new(controller: usize, lumiverse: usize) -> Self {
+        let c = CONTROLLERS.get(controller).copied().unwrap_or(CONTROLLERS[0]);
+        ControllerSetup {
+            controller,
+            name: c.name.split(',').next().unwrap_or("Controller").to_string(),
+            lumiverse,
+            leds: vec![0; c.outputs],
+            universes_per_output: 1,
+            rgbw: false,
+            area: (0.1, 0.1, 0.9, 0.9),
+        }
+    }
+
+    pub fn controller(&self) -> Controller {
+        CONTROLLERS.get(self.controller).copied().unwrap_or(CONTROLLERS[0])
+    }
+
+    pub fn max_universes(&self) -> u16 {
+        self.controller().max_universes
+    }
+
+    pub fn pixels_per_universe(&self) -> usize {
+        if self.rgbw { UNIVERSE_SIZE / 4 } else { UNIVERSE_SIZE / 3 }
+    }
+
+    /// The fewest universes per output that fit the longest output.
+    pub fn suggested_universes(&self) -> u16 {
+        let ppu = self.pixels_per_universe();
+        self.leds.iter().map(|&n| n.div_ceil(ppu) as u16).max().unwrap_or(1).max(1)
+    }
+}
+
+/// One controller output in a plan.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlanRow {
+    /// 1-based, as printed on the controller.
+    pub output: usize,
+    pub leds: usize,
+    /// First and last absolute universe.
+    pub universes: (u16, u16),
+    pub needed: u16,
+    pub fits: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct ArraySpec {
     pub name: String,
@@ -963,7 +1189,7 @@ mod tests {
     use super::*;
 
     fn one(t: FixtureType, fx: Fixture) -> AdvancedOutput {
-        AdvancedOutput { aspect: 1.0, lumiverses: vec![Lumiverse::new("L", 3)], types: vec![t], fixtures: vec![fx] }
+        AdvancedOutput { aspect: 1.0, lumiverses: vec![Lumiverse::new("L", 3)], types: vec![t], fixtures: vec![fx], groups: Vec::new() }
     }
 
     fn fx(address: u16) -> Fixture {
@@ -981,6 +1207,7 @@ mod tests {
             reverse: false,
             universe_offset: 0,
             white: Default::default(),
+            groups: Vec::new(),
         }
     }
 
@@ -1115,7 +1342,58 @@ mod tests {
             lumiverses: vec![Lumiverse::new("Ctrl", 10)],
             types: vec![FixtureType::new("strip", n_px, 1, "RGB")],
             fixtures: vec![],
+            groups: Vec::new(),
         }
+    }
+
+    #[test]
+    fn h807sa_outputs_start_on_their_own_universes() {
+        let mut o = strips(10);
+        let mut s = ControllerSetup::new(0, 0);
+        assert_eq!(s.controller().name, "H807SA");
+        s.leds = vec![600, 600, 300, 0, 0, 0, 0, 0];
+        assert_eq!(s.suggested_universes(), 4); // 600 RGB pixels = 3.5 universes
+        s.universes_per_output = 4;
+        let plan = o.controller_plan(&s);
+        assert_eq!(plan[0].universes, (10, 13));
+        assert_eq!(plan[1].universes, (14, 17));
+        assert_eq!(plan[2].universes, (18, 19));
+        let r = o.add_controller(&s).unwrap();
+        assert_eq!(r.len(), 3);
+        // Output 2's first pixel is channel 1 of universe 14.
+        let out2 = &o.fixtures[r.start + 1];
+        assert_eq!((o.lumiverses[0].universe + out2.universe_offset, out2.address), (14, 1));
+        let dmx = o.render_dmx(&Frame::new(4, 4, Rgba::rgb(1.0, 0.0, 0.0)));
+        assert_eq!(dmx[&(0, 14)][0], 255);
+        assert!(dmx.contains_key(&(0, 13)) && dmx.contains_key(&(0, 19)) && !dmx.contains_key(&(0, 20)));
+        assert_eq!(o.group_members("H807SA").len(), 3);
+        // Same strip length: one type, reused.
+        assert_eq!(o.types.iter().filter(|t| t.name == "Pixel strip 600 RGB").count(), 1);
+    }
+
+    #[test]
+    fn controller_refuses_an_output_that_is_too_long() {
+        let mut o = strips(10);
+        let mut s = ControllerSetup::new(0, 0);
+        s.leds[0] = 2000; // 12 universes: more than an H807SA output takes
+        s.universes_per_output = s.suggested_universes();
+        assert!(o.add_controller(&s).is_err());
+        assert!(o.fixtures.is_empty());
+    }
+
+    #[test]
+    fn groups_have_an_area_and_an_order() {
+        let mut o = AdvancedOutput::demo();
+        o.fixtures[0].groups = vec!["Left".into()];
+        o.fixtures[1].groups = vec!["Left".into()];
+        let a = o.group_area("Left").unwrap();
+        assert!(a[0] < a[2] && a[1] < a[3]);
+        assert_eq!(o.group_names(), vec!["Left".to_string()]);
+        o.rename_group("Left", "Side");
+        assert_eq!(o.group_members("Side").len(), 2);
+        o.remove_group("Side");
+        assert!(o.group_names().is_empty());
+        assert!(o.group_area("Side").is_none());
     }
 
     fn spec(count: usize, addressing: Addressing, direction: ArrayDirection, zigzag: bool) -> ArraySpec {

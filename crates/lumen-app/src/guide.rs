@@ -400,6 +400,7 @@ fn lights(v: &mut View, ui: &mut egui::Ui) {
                     reverse: false,
                     universe_offset,
                     white: Default::default(),
+                    groups: Vec::new(),
                 });
                 (format!("a {}×{} panel ({order})", g.mw, g.mh), 1)
             }

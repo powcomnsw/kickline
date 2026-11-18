@@ -315,7 +315,9 @@ mod tests {
                 reverse: false,
                 universe_offset: 0,
                 white: Default::default(),
+                groups: Vec::new(),
             }],
+            groups: Vec::new(),
         };
         o.render_dmx(frame)[&(0, 0)][..n].to_vec()
     }

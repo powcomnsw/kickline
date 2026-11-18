@@ -107,6 +107,8 @@ pub struct SectionDetector {
     /// Beats since the section started.
     pub beats_in: u32,
     pub reading: Reading,
+    /// Sections heard so far, oldest first, with their length in beats.
+    pub past: VecDeque<(Section, u32)>,
 }
 
 impl Default for SectionDetector {
@@ -123,6 +125,7 @@ impl Default for SectionDetector {
             ref_level: 0.0,
             beats_in: 0,
             reading: Reading::default(),
+            past: VecDeque::new(),
         }
     }
 }
@@ -242,6 +245,10 @@ impl SectionDetector {
             _ => 1,
         };
         if instant || held >= SETTLE_BEATS {
+            self.past.push_back((self.current, self.beats_in));
+            while self.past.len() > 24 {
+                self.past.pop_front();
+            }
             self.current = guess;
             self.candidate = None;
             self.beats_in = 0;
