@@ -1,3 +1,4 @@
+use crate::sections::{LayerLook, Looks, Section, SectionDetector};
 use crate::audio::{AudioBand, AudioBands, AudioLink};
 use crate::blend::{composite, BlendMode};
 use crate::effect::Effect;
@@ -35,6 +36,12 @@ pub struct Layer {
     /// (Kick, Snare or HiHat).
     #[serde(default)]
     pub advance_on: Option<AudioBand>,
+    /// Only light this group of fixtures (a "slice"); None = every fixture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// What this layer does in each song section's look.
+    #[serde(default)]
+    pub looks: [LayerLook; 5],
     /// Beat position at which the active clip was triggered.
     #[serde(skip)]
     pub trigger_beat: f64,
@@ -54,6 +61,8 @@ impl Layer {
             bypass: false,
             audio_opacity: None,
             advance_on: None,
+            target: None,
+            looks: [LayerLook::Keep; 5],
             trigger_beat: 0.0,
             seen_hits: None,
         }
@@ -64,6 +73,10 @@ impl Layer {
         let start = self.active.map(|a| a + 1).unwrap_or(0);
         (0..n).map(|i| (start + i) % n).find(|&i| self.clips[i].is_some())
     }
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -77,6 +90,15 @@ pub struct Composition {
     pub bpm: f64,
     #[serde(default)]
     pub palettes: Palettes,
+    /// A look for each song section, switched automatically if `looks.auto`.
+    #[serde(default)]
+    pub looks: Looks,
+    /// Listens for song sections.
+    #[serde(skip)]
+    pub sections: SectionDetector,
+    /// Brightness from the current section's look (1 when looks are off).
+    #[serde(skip, default = "one")]
+    pub look_level: f32,
     #[serde(skip)]
     pub beat: f64,
     #[serde(skip)]
@@ -93,6 +115,9 @@ impl Composition {
             master: 1.0,
             bpm: 120.0,
             palettes: Palettes::default(),
+            looks: Looks::default(),
+            sections: SectionDetector::default(),
+            look_level: 1.0,
             beat: 0.0,
             audio: AudioBands::default(),
         }
@@ -116,6 +141,8 @@ impl Composition {
             }
         }
         new.palettes.keep_live(&self.palettes);
+        new.sections = std::mem::take(&mut self.sections);
+        new.look_level = self.look_level;
         *self = new;
     }
 
@@ -199,6 +226,14 @@ impl Composition {
         self.clock_pulses(&mut audio);
         self.audio = audio;
         self.palettes.update(&audio, self.beat);
+        if let Some(s) = self.sections.update(&audio, self.beat) {
+            if self.looks.auto {
+                self.apply_look(s);
+            }
+        }
+        if !self.looks.auto {
+            self.look_level = 1.0;
+        }
         let mut advance = Vec::new();
         for (i, l) in self.layers.iter_mut().enumerate() {
             let Some(slot) = l.advance_on.and_then(AudioBand::hit_slot) else {
@@ -218,6 +253,28 @@ impl Composition {
                 self.trigger(i, next);
             }
         }
+    }
+
+    /// Switch to a section's look: each layer's clip, the palette, brightness.
+    pub fn apply_look(&mut self, s: Section) {
+        let i = s.index();
+        for li in 0..self.layers.len() {
+            match self.layers[li].looks[i] {
+                LayerLook::Keep => {}
+                LayerLook::Stop => self.stop(li),
+                LayerLook::Play(c) => {
+                    if self.layers[li].active != Some(c) {
+                        self.trigger(li, c);
+                    }
+                }
+            }
+        }
+        if let Some(p) = self.looks.palette[i] {
+            if p != self.palettes.active && p < self.palettes.list.len() {
+                self.palettes.select(p, self.beat);
+            }
+        }
+        self.look_level = self.looks.level[i].clamp(0.0, 1.0);
     }
 
     /// Start (or restart) the clip at (layer, column). Empty slots do nothing.
@@ -244,6 +301,22 @@ impl Composition {
         }
     }
 
+    /// Groups that active layers are aimed at (each once).
+    pub fn targeted_groups(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for l in &self.layers {
+            if l.bypass || l.active.is_none() {
+                continue;
+            }
+            if let Some(t) = &l.target {
+                if !out.contains(t) {
+                    out.push(t.clone());
+                }
+            }
+        }
+        out
+    }
+
     /// Everything needed to lay strip clips over the mapped canvas this frame.
     pub fn strip_stage(&self) -> StripStage {
         let palette = self.palettes.current(self.beat);
@@ -267,12 +340,22 @@ impl Composition {
                 opacity,
                 blend: layer.blend,
                 effects: layer.effects.clone(),
+                target: layer.target.clone(),
             });
         }
-        StripStage { passes, palette, audio: self.audio, master: self.master }
+        StripStage { passes, palette, audio: self.audio, master: self.master * self.look_level }
     }
 
+    /// The picture for fixtures outside every group (layers aimed at a group
+    /// are left out).
     pub fn render(&self) -> Frame {
+        self.render_with(&|_| None)
+    }
+
+    /// The picture for fixtures in some groups: `member(group)` gives the
+    /// group's area on the canvas if these fixtures belong to it. Layers aimed
+    /// at a group are drawn across that group's area only.
+    pub fn render_with(&self, member: &dyn Fn(&str) -> Option<[f32; 4]>) -> Frame {
         let mut out = Frame::black(self.width, self.height);
         let mut scratch = Frame::transparent(self.width, self.height);
         let palette = self.palettes.current(self.beat);
@@ -284,6 +367,13 @@ impl Composition {
             if clip.generator.is_strip() {
                 continue; // drawn per pixel at output time (strip_stage)
             }
+            scratch.area = match &layer.target {
+                None => [0.0, 0.0, 1.0, 1.0],
+                Some(g) => match member(g) {
+                    Some(a) => a,
+                    None => continue,
+                },
+            };
             let local_beat = (self.beat - layer.trigger_beat).max(0.0);
             scratch.pixels.fill(Default::default());
             clip.generator.render(&mut scratch, local_beat, &self.audio, &palette);
@@ -296,10 +386,11 @@ impl Composition {
             }
             composite(&mut out, &scratch, layer.blend, opacity);
         }
+        let master = self.master * self.look_level;
         for p in &mut out.pixels {
-            p.r *= self.master;
-            p.g *= self.master;
-            p.b *= self.master;
+            p.r *= master;
+            p.g *= master;
+            p.b *= master;
         }
         out
     }
@@ -313,6 +404,8 @@ pub struct StripPass {
     pub opacity: f32,
     pub blend: BlendMode,
     pub effects: Vec<crate::effect::Effect>,
+    /// Only fixtures in this group.
+    pub target: Option<String>,
 }
 
 /// The strip layers of one frame, ready to shade pixels.
@@ -329,14 +422,29 @@ impl StripStage {
         self.passes.is_empty()
     }
 
-    /// Lay the strip layers over a pixel's mapped colour.
+    /// Lay the strip layers over a pixel's mapped colour (fixtures outside
+    /// every group).
     pub fn shade(&self, base: Rgba, p: crate::strip::StripPixel) -> Rgba {
+        self.shade_in(base, p, &|_| None)
+    }
+
+    /// Like `shade`, for a fixture in some groups: `member(group)` gives
+    /// (this fixture's place in the group, the group's size). A layer aimed
+    /// at a group ripples across that group's fixtures only.
+    pub fn shade_in(&self, base: Rgba, p: crate::strip::StripPixel, member: &dyn Fn(&str) -> Option<(usize, usize)>) -> Rgba {
         if self.passes.is_empty() {
             return base;
         }
         let mut px = Frame::new(1, 1, base);
         let mut src = Frame::transparent(1, 1);
         for pass in &self.passes {
+            let p = match &pass.target {
+                None => p,
+                Some(g) => match member(g) {
+                    Some((fixture, fixtures)) => crate::strip::StripPixel { fixture, fixtures, ..p },
+                    None => continue,
+                },
+            };
             let mut c = pass.clip.shade(p, pass.beat, &self.audio, &self.palette);
             c.r *= self.master;
             c.g *= self.master;
@@ -373,6 +481,66 @@ mod tests {
         let at = |x: f32| st.shade(base, StripPixel { fixture: 0, fixtures: 1, index: 0, count: 10, x, y: 0.0 });
         assert_eq!((at(0.1).r, at(0.1).g), (0.0, 1.0));
         assert_eq!((at(0.9).r, at(0.9).g), (1.0, 0.0));
+    }
+
+    #[test]
+    fn layer_aimed_at_a_group_only_lights_that_group() {
+        let mut c = Composition::new(10, 1, 1);
+        let mut l = Layer::new("Left only", 1);
+        l.blend = BlendMode::Normal;
+        l.clips[0] = Some(Clip::new("w", Generator::Solid { color: Paint::Rgb([1.0, 1.0, 1.0]) }));
+        l.target = Some("Left".into());
+        c.layers.push(l);
+        c.trigger(0, 0);
+        assert_eq!(c.render().pixels[0].r, 0.0); // fixtures outside the group stay dark
+        let left = c.render_with(&|g| (g == "Left").then_some([0.0, 0.0, 0.5, 1.0]));
+        assert_eq!(left.pixels[0].r, 1.0);
+        let right = c.render_with(&|g| (g == "Right").then_some([0.5, 0.0, 1.0, 1.0]));
+        assert_eq!(right.pixels[0].r, 0.0);
+        assert_eq!(c.targeted_groups(), vec!["Left".to_string()]);
+    }
+
+    #[test]
+    fn strip_layer_ripples_across_its_group() {
+        use crate::strip::{StripClip, StripEffect, StripPixel};
+        let mut c = Composition::new(4, 4, 1);
+        let mut l = Layer::new("Strips", 1);
+        l.blend = BlendMode::Normal;
+        let mut sc = StripClip::new(StripEffect::Fill { color: Paint::Rgb([0.0, 1.0, 0.0]), beats: 4.0 });
+        sc.stagger = 2.0;
+        l.clips[0] = Some(Clip::new("Fill", Generator::Strip(sc)));
+        l.target = Some("Panels".into());
+        c.layers.push(l);
+        c.trigger(0, 0);
+        c.beat = 2.5;
+        let st = c.strip_stage();
+        let base = Rgba::rgb(1.0, 0.0, 0.0);
+        let p = StripPixel { fixture: 7, fixtures: 9, index: 0, count: 10, x: 0.5, y: 0.0 };
+        // Not in the group: untouched.
+        assert_eq!(st.shade(base, p).r, 1.0);
+        // First in the group: already filling; last in the group: waits for the ripple.
+        assert!(st.shade_in(base, p, &|_| Some((0, 2))).g > 0.5, "{:?}", st.shade_in(base, p, &|_| Some((0, 2))));
+        assert!(st.shade_in(base, p, &|_| Some((1, 2))).g < 0.1);
+    }
+
+    #[test]
+    fn looks_switch_with_the_section() {
+        let mut c = Composition::demo();
+        c.palettes.list.push(c.palettes.list[0].clone());
+        let drop = Section::Drop.index();
+        c.layers[2].looks[drop] = LayerLook::Play(1);
+        c.layers[1].looks[drop] = LayerLook::Stop;
+        c.looks.palette[drop] = Some(1);
+        c.looks.level[drop] = 0.5;
+        c.apply_look(Section::Drop);
+        assert_eq!(c.layers[2].active, Some(1));
+        assert_eq!(c.layers[1].active, None);
+        assert_eq!(c.palettes.active, 1);
+        assert_eq!(c.look_level, 0.5);
+        let s = serde_json::to_string(&c).unwrap();
+        let back: Composition = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.layers[2].looks[drop], LayerLook::Play(1));
+        assert_eq!(back.look_level, 1.0);
     }
 
     #[test]

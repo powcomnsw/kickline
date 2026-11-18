@@ -108,6 +108,9 @@ pub struct AudioBands {
     /// Running hit counters for Kick, Snare, HiHat, Beat, Bar. Consumers compare
     /// against the last value they saw to detect new hits.
     pub hits: [u64; 5],
+    /// Level, Sub, Bass, LowMid, HighMid and High before auto-levelling
+    /// (raw loudness), so quiet and loud parts of a track can be told apart.
+    pub raw: [f32; 6],
 }
 
 impl AudioBands {

@@ -297,6 +297,9 @@ impl Analyzer {
             b.peak = (b.peak * peak_decay).max(b.smooth).max(0.02);
             let v = if b.smooth < GATE { 0.0 } else { b.smooth / b.peak };
             self.out.values[i] = (v * self.settings.band_gain[i]).clamp(0.0, 1.0);
+            if let Some(r) = self.out.raw.get_mut(i) {
+                *r = b.smooth;
+            }
         }
 
         // Onsets, in decibels: the rise over the last few hops, against an
@@ -337,7 +340,11 @@ impl Analyzer {
             if rise < threshold * 0.5 {
                 d.armed = true;
             }
-            if d.armed && loud_enough && dominant[i] && rise > threshold && d.since_hit > d.refractory {
+            // A kick arriving out of real silence (the pause before a drop) is
+            // a hit even if a noisy build-up taught the detector to expect
+            // huge rises: that first kick of the drop matters most.
+            let from_silence = i == 0 && rise >= 23.9 && old < d.peak_db - 30.0;
+            if d.armed && loud_enough && dominant[i] && (rise > threshold || from_silence) && d.since_hit > d.refractory {
                 d.hits += 1;
                 d.since_hit = 0.0;
                 d.pulse = 1.0;
@@ -375,6 +382,60 @@ mod tests {
         let s: Vec<f32> = (0..FS as usize).map(|i| 0.5 * (2.0 * PI * freq * i as f32 / FS).sin()).collect();
         a.process(&s);
         a.bands()
+    }
+
+    /// The arranged demo track, through the real analyser, into the section
+    /// detector: it should name each part of the track while it plays.
+    #[test]
+    fn demo_track_sections_are_recognised() {
+        use crate::demo::{DemoBeat, Part};
+        use lumen_core::{Section, SectionDetector};
+        let bpm = 128.0;
+        let mut a = Analyzer::new(FS);
+        let mut beat_src = DemoBeat::new(FS, bpm);
+        beat_src.arranged = true;
+        let mut d = SectionDetector::default();
+        let block = 480; // 10 ms
+        let mut buf = vec![0.0; block];
+        let mut t = 0.0f64;
+        let beats = DemoBeat::CYCLE_BARS as f64 * 4.0 * 3.0 + 4.0;
+        let mut log: Vec<(i64, Section)> = Vec::new();
+        while t * bpm as f64 / 60.0 < beats {
+            beat_src.fill(&mut buf);
+            a.process(&buf);
+            t += block as f64 / FS as f64;
+            let beat = t * bpm as f64 / 60.0;
+            d.update(&a.bands(), beat);
+            let b = beat.floor() as i64;
+            if log.last().is_none_or(|l| l.0 != b) {
+                log.push((b, d.current()));
+            }
+        }
+        // Third time round: check what was called during each part, allowing
+        // a bar to react (the pause and drop must be caught within a beat).
+        let cycle = DemoBeat::CYCLE_BARS * 4;
+        let start = cycle * 2;
+        let at = |b: i64| log.iter().find(|l| l.0 == start + b).map(|l| l.1).unwrap();
+        let summary: Vec<String> = (0..cycle).map(|b| format!("{b}:{:?}/{:?}", DemoBeat::part(b), at(b))).collect();
+        let s = summary.join(" ");
+        for b in 6..32 {
+            assert_eq!(at(b), Section::Drop, "beat {b}: {s}");
+        }
+        for b in 40..48 {
+            assert_eq!(at(b), Section::Groove, "beat {b}: {s}");
+        }
+        for b in 54..64 {
+            assert_eq!(at(b), Section::Melodic, "beat {b}: {s}");
+        }
+        for b in 70..79 {
+            assert_eq!(at(b), Section::BuildUp, "beat {b}: {s}");
+        }
+        // The log holds the section at the start of each beat, so the pause
+        // (beat 79) shows from beat 80 and the drop (beat 80) from beat 81.
+        assert_eq!(DemoBeat::part(79), Part::Pause);
+        let next = |b: i64| log.iter().find(|l| l.0 == start + b).map(|l| l.1);
+        assert_eq!(next(cycle), Some(Section::Pause), "{s}");
+        assert_eq!(next(cycle + 1), Some(Section::Drop), "{s}");
     }
 
     #[test]

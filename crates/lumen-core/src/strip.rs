@@ -63,6 +63,21 @@ pub struct StripClip {
     pub stagger: f32,
 }
 
+impl StripEffect {
+    pub fn paint_mut(&mut self) -> &mut Paint {
+        match self {
+            StripEffect::Meteor { color, .. }
+            | StripEffect::Fill { color, .. }
+            | StripEffect::Burst { color, .. }
+            | StripEffect::Segments { color, .. }
+            | StripEffect::Sparkle { color, .. }
+            | StripEffect::Meter { color, .. }
+            | StripEffect::Dashes { color, .. }
+            | StripEffect::Alternate { color, .. } => color,
+        }
+    }
+}
+
 impl StripClip {
     pub fn new(effect: StripEffect) -> Self {
         StripClip { effect, reverse: false, mirror: false, stagger: 0.0 }

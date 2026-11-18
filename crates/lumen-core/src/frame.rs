@@ -27,11 +27,16 @@ pub struct Frame {
     pub width: usize,
     pub height: usize,
     pub pixels: Vec<Rgba>,
+    /// The part of the canvas that generators treat as their whole 0..1
+    /// space (x0, y0, x1, y1). Normally the full canvas; a layer aimed at a
+    /// group of fixtures uses the group's bounding box, so a sweep runs
+    /// across that group instead of the whole stage.
+    pub area: [f32; 4],
 }
 
 impl Frame {
     pub fn new(width: usize, height: usize, fill: Rgba) -> Self {
-        Frame { width, height, pixels: vec![fill; width * height] }
+        Frame { width, height, pixels: vec![fill; width * height], area: [0.0, 0.0, 1.0, 1.0] }
     }
 
     pub fn transparent(width: usize, height: usize) -> Self {
@@ -53,13 +58,16 @@ impl Frame {
         self.get(x, y)
     }
 
-    /// Fill every pixel from `f(u, v)` where u,v are pixel-centre coordinates in 0..1.
+    /// Fill every pixel from `f(u, v)` where u,v are pixel-centre coordinates
+    /// in 0..1 across `area` (outside it they run past 0..1).
     pub fn fill_with(&mut self, mut f: impl FnMut(f32, f32) -> Rgba) {
         let (w, h) = (self.width, self.height);
+        let [x0, y0, x1, y1] = self.area;
+        let (aw, ah) = ((x1 - x0).max(1e-4), (y1 - y0).max(1e-4));
         for y in 0..h {
             for x in 0..w {
-                let u = (x as f32 + 0.5) / w as f32;
-                let v = (y as f32 + 0.5) / h as f32;
+                let u = ((x as f32 + 0.5) / w as f32 - x0) / aw;
+                let v = ((y as f32 + 0.5) / h as f32 - y0) / ah;
                 self.pixels[y * w + x] = f(u, v);
             }
         }
