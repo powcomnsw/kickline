@@ -1,11 +1,18 @@
 # Builds Kickline.app + Kickline-<version>.dmg on GitHub's Mac runners.
-# Runs on every push to main (or "Run workflow" in the Actions tab).
+# Runs on every push to main (or "Run workflow" in the Actions tab, where you
+# can pick an Intel Mac if GitHub's Apple-silicon Macs are busy).
 # The .dmg appears under the run's "Artifacts" and on the Releases page,
 # tagged with the version from Cargo.toml.
 name: macOS build
 
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: "Mac to build on (macos-15-intel when Apple-silicon Macs are busy; both make the same universal app)"
+        default: macos-latest
+        type: choice
+        options: [macos-latest, macos-15-intel]
   push:
     branches: [main]
     tags: ["v*"]
@@ -17,7 +24,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: ${{ inputs.runner || 'macos-latest' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
