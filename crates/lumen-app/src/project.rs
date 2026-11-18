@@ -27,6 +27,9 @@ pub struct Project {
 const MAX_UNDO: usize = 200;
 const CHECK_EVERY: Duration = Duration::from_millis(250);
 const AUTOSAVE_AFTER: Duration = Duration::from_secs(2);
+/// Keep a backup copy at most this often, and this many per show.
+const BACKUP_EVERY: Duration = Duration::from_secs(300);
+const BACKUPS_KEPT: usize = 10;
 
 /// The show as undo sees it: everything saved, minus what's live.
 pub fn key(p: &Project) -> String {
@@ -58,13 +61,28 @@ pub struct Session {
     dirty_since: Option<Instant>,
     pub last_saved: Option<Instant>,
     pub save_error: Option<String>,
+    last_backup: Option<Instant>,
+    /// Show the "Recent shows" card until this moment (set at launch).
+    pub recent_card_until: Option<Instant>,
     /// True when no project existed at launch (first run): show the guide.
     pub first_run: bool,
 }
 
 impl Session {
     pub fn new(path: PathBuf, first_run: bool) -> Self {
-        Session { path, undo: Vec::new(), redo: Vec::new(), committed: None, last_check: None, dirty_since: None, last_saved: None, save_error: None, first_run }
+        Session {
+            path,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            committed: None,
+            last_check: None,
+            dirty_since: None,
+            last_saved: None,
+            save_error: None,
+            last_backup: None,
+            recent_card_until: (!first_run).then(|| Instant::now() + Duration::from_secs(12)),
+            first_run,
+        }
     }
 
     pub fn can_undo(&self) -> bool {
@@ -210,10 +228,32 @@ pub fn read(path: &Path) -> Result<Project, String> {
     serde_json::from_str::<Project>(&s).map_err(|e| e.to_string())
 }
 
+/// Copy the file as it is now into the show's backup folder, dropping the
+/// oldest copies beyond `BACKUPS_KEPT`. Like a DAW's autosave history.
+pub fn backup(path: &Path) -> std::io::Result<PathBuf> {
+    let dir = paths::backups_dir(path);
+    std::fs::create_dir_all(&dir)?;
+    let (_, stamp) = paths::timestamp();
+    let dest = dir.join(format!("{stamp}.json"));
+    std::fs::copy(path, &dest)?;
+    let mut old: Vec<PathBuf> = std::fs::read_dir(&dir)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+    old.sort();
+    while old.len() > BACKUPS_KEPT {
+        let _ = std::fs::remove_file(old.remove(0));
+    }
+    Ok(dest)
+}
+
 /// Save to the current file now.
 pub fn save_now(v: &mut View) {
     let p = snapshot(v);
     let path = v.s.session.path.clone();
+    // Before overwriting, keep the previous version now and then.
+    if path.exists() && v.s.session.last_backup.is_none_or(|t| t.elapsed() >= BACKUP_EVERY) {
+        if backup(&path).is_ok() {
+            v.s.session.last_backup = Some(Instant::now());
+        }
+    }
     match write(&path, &p) {
         Ok(()) => {
             v.s.session.dirty_since = None;
@@ -245,6 +285,22 @@ fn switch_to(v: &mut View, path: PathBuf, p: Project) {
 
 fn dialog() -> rfd::FileDialog {
     rfd::FileDialog::new().add_filter("Kickline show", &["json"]).set_directory(paths::projects_dir())
+}
+
+/// Rename an unreadable show to "<name> (couldn't open).json" so nothing
+/// overwrites it; returns where it went.
+fn set_aside(path: &Path) -> PathBuf {
+    let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "show".into());
+    let mut dest = path.with_file_name(format!("{stem} (couldn't open).json"));
+    let mut n = 2;
+    while dest.exists() {
+        dest = path.with_file_name(format!("{stem} (couldn't open {n}).json"));
+        n += 1;
+    }
+    match std::fs::rename(path, &dest) {
+        Ok(()) => dest,
+        Err(_) => path.to_path_buf(),
+    }
 }
 
 /// Pick a name for a new show file that doesn't exist yet.
@@ -313,18 +369,26 @@ pub fn startup() -> (PathBuf, Project, bool) {
         candidates.push(p);
     }
     candidates.push(paths::project_file());
+    let mut had_shows = false;
     for path in candidates {
         if path.exists() {
+            had_shows = true;
             match read(&path) {
                 Ok(p) => {
                     log::info("project", format!("opened {}", path.display()));
                     return (path, p, false);
                 }
-                Err(e) => log::error("project", format!("couldn't open {}: {e}", path.display())),
+                Err(e) => {
+                    // Never autosave over a show we couldn't read: move it aside.
+                    let aside = set_aside(&path);
+                    log::error("project", format!("couldn't open {}: {e}. Kept it as {}", path.display(), aside.display()));
+                }
             }
         }
     }
-    (paths::project_file(), Project { composition: Composition::demo(), output: AdvancedOutput::demo() }, true)
+    // Start on the default file only if it isn't taken by something we couldn't read.
+    let path = if paths::project_file().exists() { fresh_path("My show") } else { paths::project_file() };
+    (path, Project { composition: Composition::demo(), output: AdvancedOutput::demo() }, !had_shows)
 }
 
 #[cfg(test)]
@@ -373,6 +437,48 @@ mod tests {
         q.composition.layers[0].name = "Z".into();
         s.commit(q);
         assert!(!s.can_redo());
+    }
+
+    #[test]
+    fn backups_keep_the_newest_ten() {
+        let dir = std::env::temp_dir().join(format!("kickline-bak-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Club night.json");
+        write(&path, &demo()).unwrap();
+        // Fake 12 older backups with sortable names.
+        let bdir = paths::backups_dir(&path);
+        std::fs::create_dir_all(&bdir).unwrap();
+        for i in 0..12 {
+            std::fs::write(bdir.join(format!("2000-01-01-00-00-{i:02}.json")), "{}").unwrap();
+        }
+        let made = backup(&path).unwrap();
+        let left: Vec<_> = std::fs::read_dir(&bdir).unwrap().collect();
+        assert_eq!(left.len(), BACKUPS_KEPT);
+        assert!(made.exists(), "the newest backup is kept");
+        let _ = std::fs::remove_dir_all(&bdir);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unreadable_show_is_moved_aside_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("kickline-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bad = dir.join("Gig.json");
+        std::fs::write(&bad, "{ not a show").unwrap();
+        let moved = set_aside(&bad);
+        assert!(!bad.exists());
+        assert_eq!(moved.file_name().unwrap(), "Gig (couldn't open).json");
+        assert_eq!(std::fs::read_to_string(&moved).unwrap(), "{ not a show");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[ignore]
+    fn write_demo_show() {
+        // Makes sample shows for screenshots: KICKLINE_DEMO_OUT=/path.json
+        if let Ok(p) = std::env::var("KICKLINE_DEMO_OUT") {
+            write(Path::new(&p), &demo()).unwrap();
+        }
     }
 
     #[test]

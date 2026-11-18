@@ -153,8 +153,9 @@ impl View<'_> {
             ui.add(egui::Slider::new(&mut self.e.comp.master, 0.0..=1.0).show_value(false));
             ui.add_space(14.0);
             let on = self.e.output_enabled;
-            let label = egui::RichText::new(if on { "DMX OUT  ON" } else { "DMX OUT  OFF" }).font(theme::bold(t.text_size - 1.0));
-            let b = egui::Button::new(if on { label.color(t.on_accent) } else { label.color(t.weak) }).fill(if on { t.accent } else { t.raised });
+            let dead = self.e.health.state(on) == engine::OutputState::Dead;
+            let label = egui::RichText::new(if dead { "DMX  DEAD" } else if on { "DMX OUT  ON" } else { "DMX OUT  OFF" }).font(theme::bold(t.text_size - 1.0));
+            let b = egui::Button::new(if on { label.color(t.on_accent) } else { label.color(t.weak) }).fill(if dead { t.err } else if on { t.accent } else { t.raised });
             if ui.add(b).on_hover_text("Send to your lights").clicked() {
                 self.e.output_enabled = !on;
             }
@@ -170,16 +171,69 @@ impl View<'_> {
                 }
                 ui.add_space(12.0);
                 let (_, errs) = log::counts();
+                // Short labels when the window is narrow, so nothing overlaps.
+                let compact = ui.available_width() < 560.0;
                 let w = &mut self.s.windows;
-                let diag = if errs > 0 { format!("Diagnostics ({errs})") } else { "Diagnostics".into() };
-                ui.toggle_value(&mut w.diagnostics, diag);
+                let diag_name = if compact { "Diag." } else { "Diagnostics" };
+                let diag = if errs > 0 { format!("{diag_name} ({errs})") } else { diag_name.into() };
+                ui.toggle_value(&mut w.diagnostics, diag).on_hover_text("Diagnostics");
                 ui.toggle_value(&mut w.audio, "Audio");
-                ui.toggle_value(&mut w.dmx_monitor, "DMX Monitor");
+                ui.toggle_value(&mut w.dmx_monitor, if compact { "DMX" } else { "DMX Monitor" }).on_hover_text("DMX Monitor");
                 ui.toggle_value(&mut w.fixture_editor, "Fixtures");
-                ui.toggle_value(&mut w.advanced_output, "Advanced Output");
+                ui.toggle_value(&mut w.advanced_output, if compact { "Output" } else { "Advanced Output" }).on_hover_text("Advanced Output");
             });
         });
         ui.add_space(4.0);
+    }
+
+    /// Output health: an unmissable badge, then universes, rate and count.
+    fn output_badge(&mut self, ui: &mut egui::Ui) {
+        use engine::OutputState::*;
+        let t = theme::current();
+        let state = self.e.health.state(self.e.output_enabled);
+        let blink = (ui.input(|i| i.time) * 2.0).fract() < 0.6;
+        let (label, fill, fg) = match state {
+            Off => ("OUTPUT OFF", t.raised, t.weak),
+            Idle => ("NOTHING TO SEND", t.raised, t.warn),
+            Live => ("OUTPUT LIVE", theme::dim(t.ok, 0.35), t.ok),
+            Partial => ("OUTPUT PARTLY FAILING", theme::dim(t.warn, 0.35), t.warn),
+            Dead => ("OUTPUT DEAD", if blink { t.err } else { theme::dim(t.err, 0.5) }, Color32::WHITE),
+        };
+        let r = ui.add(egui::Button::new(egui::RichText::new(label).font(theme::bold(t.text_size - 2.0)).color(fg)).fill(fill).corner_radius(t.radius));
+        let tip = match state {
+            Off => "DMX output is off. Click DMX OUT in the top bar to send to your lights.".to_string(),
+            Idle => "Output is on, but no fixtures or universes are set up to send yet.".to_string(),
+            Live => "Packets are leaving for every universe.".to_string(),
+            Partial | Dead => {
+                let e = self.e.health.last_error.as_ref().map(|(_, e)| e.clone()).unwrap_or_default();
+                format!("{e}\nClick for Diagnostics.")
+            }
+        };
+        if r.on_hover_text(tip).clicked() && matches!(state, Partial | Dead) {
+            self.s.windows.diagnostics = true;
+        }
+        if matches!(state, Live | Partial) {
+            let art: Vec<u16> = self.e.health.universes.iter().filter(|(sacn, _)| !sacn).map(|(_, u)| *u).collect();
+            let sacn: Vec<u16> = self.e.health.universes.iter().filter(|(sacn, _)| *sacn).map(|(_, u)| *u + 1).collect();
+            let mut parts = Vec::new();
+            if !art.is_empty() {
+                let first = art.iter().min().copied().unwrap_or(0);
+                parts.push(format!("Art-Net U{} (net {} sub {})", engine::universe_ranges(art.clone()), first >> 8, (first >> 4) & 15));
+            }
+            if !sacn.is_empty() {
+                parts.push(format!("sACN U{}", engine::universe_ranges(sacn.clone())));
+            }
+            let n = art.len() + sacn.len();
+            ui.label(egui::RichText::new(format!("{} · {n} universe{} · {:.0} Hz", parts.join(" + "), if n == 1 { "" } else { "s" }, self.e.metrics.output_hz())).color(t.weak));
+        }
+        if let Some(sw) = self.e.sweep {
+            let base = self.e.output.lumiverses.get(sw.lumiverse).map(|l| l.universe).unwrap_or(0);
+            ui.separator();
+            ui.colored_label(t.warn, format!("Sweeping: universe {} lit", base + sw.current()));
+            if ui.small_button("Stop sweep").clicked() {
+                self.e.sweep = None;
+            }
+        }
     }
 
     /// The show's name, save state and file actions.
@@ -193,10 +247,11 @@ impl View<'_> {
         } else {
             ("✓", "All changes saved")
         };
-        let short: String = if name.chars().count() > 18 { name.chars().take(17).chain(['…']).collect() } else { name.clone() };
+        let short: String = if name.chars().count() > 16 { name.chars().take(15).chain(['…']).collect() } else { name.clone() };
         let label = egui::RichText::new(format!("{short} {mark}"));
         let label = if self.session.save_error.is_some() { label.color(t.err) } else { label };
         let mut action = None;
+        let mut open_recent: Option<std::path::PathBuf> = None;
         ui.menu_button(label, |ui| {
             ui.weak("Changes save automatically.");
             if let Some(e) = &self.session.save_error {
@@ -209,6 +264,17 @@ impl View<'_> {
             if ui.button("Open…").clicked() {
                 action = Some(1);
             }
+            let recent: Vec<_> = paths::recent_projects().into_iter().filter(|p| *p != self.session.path).collect();
+            ui.add_enabled_ui(!recent.is_empty(), |ui| {
+                ui.menu_button("Open recent", |ui| {
+                    for p in recent {
+                        let name = p.file_stem().map(|s| s.to_string_lossy().replace("kickline_project", "My show")).unwrap_or_default();
+                        if ui.button(name).on_hover_text(p.display().to_string()).clicked() {
+                            open_recent = Some(p);
+                        }
+                    }
+                });
+            });
             if ui.button("Save as…").on_hover_text("Save a copy under a new name and keep working in the copy").clicked() {
                 action = Some(2);
             }
@@ -218,6 +284,9 @@ impl View<'_> {
             ui.separator();
             if ui.button("Setup guide…").clicked() {
                 action = Some(4);
+            }
+            if ui.button("Show backups").on_hover_text("Kickline keeps the last 10 versions of each show, saved every few minutes").clicked() {
+                action = Some(5);
             }
             ui.weak(self.session.path.display().to_string());
         })
@@ -232,16 +301,22 @@ impl View<'_> {
             Some(2) => project::save_as_dialog(self),
             Some(3) => project::save_now(self),
             Some(4) => self.s.guide.open(),
+            Some(5) => {
+                let dir = paths::backups_dir(&self.session.path);
+                let _ = std::fs::create_dir_all(&dir);
+                paths::reveal(&dir);
+            }
             _ => {}
+        }
+        if let Some(p) = open_recent {
+            project::open_path(self, p);
         }
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         let t = theme::current();
         ui.horizontal(|ui| {
-            let (dot, txt) = if self.e.output_enabled { (t.ok, self.e.status.clone()) } else { (t.weak, "DMX output off".into()) };
-            ui.colored_label(dot, "●");
-            ui.label(egui::RichText::new(txt).color(t.weak));
+            self.output_badge(ui);
             if let Some(tst) = self.e.test {
                 let name = self.e.output.fixtures.get(tst.fixture).map(|f| f.name.clone()).unwrap_or_default();
                 ui.separator();
@@ -429,6 +504,7 @@ impl eframe::App for LumenApp {
         v.windows.diagnostics = open;
 
         guide::ui(&mut v, &ctx);
+        recent_card(&mut v, &ctx);
 
         // A window that was just opened (from a button anywhere) always comes to the front.
         let now_open = [v.windows.advanced_output, v.windows.fixture_editor, v.windows.dmx_monitor, v.windows.audio, v.windows.diagnostics];
@@ -456,6 +532,50 @@ impl eframe::App for LumenApp {
         if let Some(h) = self.engine_thread.take() {
             let _ = h.join();
         }
+    }
+}
+
+/// For a few seconds after launch: which show was reopened, and one-click
+/// access to the other recent ones.
+fn recent_card(v: &mut View, ctx: &egui::Context) {
+    let Some(until) = v.s.session.recent_card_until else { return };
+    let others: Vec<_> = paths::recent_projects().into_iter().filter(|p| *p != v.s.session.path).take(5).collect();
+    if std::time::Instant::now() > until || others.is_empty() || v.s.guide.is_open {
+        v.s.session.recent_card_until = None;
+        return;
+    }
+    let t = theme::current();
+    let mut pick = None;
+    let mut close = false;
+    egui::Area::new(egui::Id::unique("recent_card"))
+        .anchor(egui::Align2::RIGHT_TOP, [-12.0, 52.0])
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).inner_margin(12).show(ui, |ui| {
+                ui.set_width(260.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(format!("Opened {}", v.s.session.name())).font(theme::bold(t.text_size)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("×").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+                ui.weak("Recent shows");
+                for p in &others {
+                    let name = p.file_stem().map(|s| s.to_string_lossy().replace("kickline_project", "My show")).unwrap_or_default();
+                    if ui.button(name).on_hover_text(p.display().to_string()).clicked() {
+                        pick = Some(p.clone());
+                    }
+                }
+            });
+        });
+    if close {
+        v.s.session.recent_card_until = None;
+    }
+    if let Some(p) = pick {
+        v.s.session.recent_card_until = None;
+        project::open_path(v, p);
     }
 }
 

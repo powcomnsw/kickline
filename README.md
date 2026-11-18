@@ -103,7 +103,13 @@ canvas, fixture types, and the audio routing.
 - **It saves by itself**, two seconds after any change and again when you quit.
   The show name at the top right shows **✓** when everything is saved, **•**
   while saving and **⚠** if saving failed (click it to see why).
-- **Next week, just open Kickline.** It reopens the show you had open last.
+- **Next week, just open Kickline.** It reopens the show you had open last, and
+  shows your **recent shows** for a few seconds so you can switch with one click.
+  They're also under **Open recent** in the show menu.
+- **Backups:** every few minutes Kickline keeps a copy of the previous version,
+  the last 10 per show, in `~/Documents/Kickline/Backups`. **Show backups** in the
+  show menu opens the folder. A show that can't be read is never overwritten: it's
+  renamed "… (couldn't open).json" and kept.
 - **The show menu** (click the show name, top right):
   - **New show**: a fresh show with the demo clips and an empty patch, then the setup guide.
   - **Open…**: pick another show file.
@@ -127,11 +133,32 @@ version opens in a newer one.
 </details>
 
 <details>
+<summary><b>Checking your hardware first</b></summary>
+
+Before adding fixtures, select a lumiverse in Advanced Output and click
+**Sweep universes**. Kickline lights every channel of one universe at a time
+(half brightness, 1.5 s each, or step with ◀ ▶) and shows which universe is on,
+with its Art-Net Net:Sub-Net:Universe. Whatever lights up is listening to that
+universe. If it lights one step late, your controller counts from 1. Moving heads
+and strobes will move or flash during the sweep.
+
+**Find nodes** lists every Art-Net controller that answers, and the status bar
+shows **OUTPUT LIVE** / **OUTPUT DEAD** with the universes going out, so a dropped
+cable shows up straight away, not mid-set.
+
+</details>
+
+<details>
 <summary><b>Adding your fixtures</b></summary>
 
-Fixture Editor › **Library**: search for the brand or model, pick the mode
-your fixture is set to, then **Add and place in Advanced Output**. The list
-shows what Kickline does with every channel.
+Fixture Editor › **Library**: search by brand, model, type or channel count:
+"16 channel moving head", "par 7ch", "pixel bar", "chauvet slimpar". Each result
+shows its type, the channel count of every mode and a coloured pinout (dimmer,
+RGB, pan/tilt, gobo, strobe…); hover it for the breakdown. Pick the mode your
+fixture is set to, then **Add and place in Advanced Output**.
+
+Select a fixture in Advanced Output to see its **live channel values** as they're
+sent, and **Test this light** to check colour order and wiring.
 
 Not in the list? Download it from [open-fixture-library.org](https://open-fixture-library.org)
 as a **QLC+ fixture** (`.qxf`) and drag the file onto the window. It's copied to
@@ -187,17 +214,18 @@ crash reports and (if you choose) your project. Nothing is uploaded.
 | Area | |
 |---|---|
 | Getting started | Setup guide (controller → lights → test → play), "Test this light" for colour order and wiring, plain-language hover help for every lighting term |
-| Saving | Autosave, reopens your last show, New / Open / Save as, undo and redo (⌘Z / ⌘⇧Z) that never stops what's playing |
+| Saving | Autosave, reopens your last show, recent shows, rolling backups, New / Open / Save as, undo and redo (⌘Z / ⌘⇧Z) that never stops what's playing |
 | Look | Three dark themes (Tungsten, Gel, Stage) for dark venues, Atkinson Hyperlegible font, live clip thumbnails, a colour per layer |
 | Composition | Layers × clip grid, column triggers, opacity / blend / bypass / effects per layer, master, BPM clock, right-click clip editing |
 | Generators | Solid, Rainbow, Strobe, Chase, Plasma, Audio flash, Bands, Palette wash |
 | Strip effects | Run along every strip on its own, at any angle: Meteor (and bounce), Fill, Kick burst, Segments, Sparkle, Meter, Dashes, Alternate. Reverse, from-the-middle and a ripple across strips. Shown live in the preview |
 | Effects | Brightness, Hue shift, Invert, Pulse, Audio brightness, Audio hue |
 | Colour palettes | Clips use palette colour 1–4 or a fixed colour; 8 palettes to start, editable; change on Bar / Beat / Kick / Snare / Hi-hat every N, with a crossfade |
+| Output health | Status bar: OUTPUT LIVE / PARTLY FAILING / DEAD (blinks, DMX button turns red), universes going out with Art-Net net/sub-net, universe count and rate. Universe sweep with no fixtures needed. Live channel values for the selected fixture |
 | Smooth output | ArtSync so every universe changes on the same frame, per-controller refresh cap for pixel controllers that glitch when fed too fast |
 | Art-Net nodes | Find nodes (ArtPoll) with one-click setup; live status per lumiverse, wrong-universe warnings, alert when a node drops out |
 | Advanced Output | Art-Net / sACN lumiverses with their own universe, IP and network port; drag / resize / rotate fixtures; snake and reverse wiring; universe spill; overlap warnings; array tool; RGBW white modes |
-| Fixtures | 1,781 built-in (QLC+), `.qxf` import, pixel-grid editor, colour order presets |
+| Fixtures | 1,781 built-in (QLC+), search by type and channel count, pinout preview per mode, "Kickline can drive" filter, `.qxf` import, pixel-grid editor, colour order presets |
 | Audio | Live input or loopback, 5 bands + level, kick / snare / hi-hat detection that works at any volume and through loud, sidechained masters, sensitivity per drum with a live meter, per-layer routing |
 | rekordbox | Direct capture on macOS 14.2+, Ableton Link tempo and beat sync |
 | Timing | Engine on its own thread at a fixed DMX rate (44 Hz default); hits sent about 1 ms after detection |

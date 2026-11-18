@@ -82,6 +82,36 @@ pub fn last_project() -> Option<PathBuf> {
 
 pub fn set_last_project(path: &std::path::Path) {
     let _ = std::fs::write(last_project_file(), path.to_string_lossy().as_bytes());
+    add_recent(path);
+}
+
+fn recent_file() -> PathBuf {
+    data_dir().join("recent_shows.txt")
+}
+
+/// Shows opened lately, newest first, only those that still exist.
+pub fn recent_projects() -> Vec<PathBuf> {
+    std::fs::read_to_string(recent_file())
+        .unwrap_or_default()
+        .lines()
+        .map(|l| PathBuf::from(l.trim()))
+        .filter(|p| !p.as_os_str().is_empty() && p.exists())
+        .collect()
+}
+
+fn add_recent(path: &std::path::Path) {
+    let mut list = recent_projects();
+    list.retain(|p| p != path);
+    list.insert(0, path.to_path_buf());
+    list.truncate(10);
+    let text: Vec<String> = list.iter().map(|p| p.to_string_lossy().to_string()).collect();
+    let _ = std::fs::write(recent_file(), text.join("\n"));
+}
+
+/// Where automatic backups of a show go: ~/Documents/Kickline/Backups/<show>/
+pub fn backups_dir(show: &std::path::Path) -> PathBuf {
+    let stem = show.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "show".into());
+    projects_dir().join("Backups").join(stem)
 }
 
 /// Your own fixture files (.qxf), scanned by the fixture library.

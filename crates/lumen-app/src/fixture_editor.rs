@@ -3,7 +3,7 @@
 
 use crate::{log, paths, View};
 use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke, Vec2};
-use lumen_fixtures::library::Library;
+use lumen_fixtures::library::{Library, Pin};
 use lumen_fixtures::qxf::QxfFixture;
 use lumen_fixtures::{color_order, ChannelFn, Fixture, FixtureType, Slot, COLOR_ORDERS};
 
@@ -18,6 +18,8 @@ pub struct State {
     pub opened: Option<Result<QxfFixture, String>>,
     pub mode: usize,
     pub message: Option<String>,
+    /// Hide fixtures with no colour or dimmer channels.
+    pub drivable_only: bool,
 }
 
 impl State {
@@ -233,6 +235,93 @@ fn type_editor(ui: &mut egui::Ui, t: &mut FixtureType) {
     });
 }
 
+/// Colour for each kind of channel in the pinout strip.
+pub fn pin_color(p: Pin) -> Color32 {
+    match p {
+        Pin::Dimmer => Color32::from_gray(200),
+        Pin::Red => Color32::from_rgb(230, 60, 60),
+        Pin::Green => Color32::from_rgb(60, 200, 90),
+        Pin::Blue => Color32::from_rgb(70, 120, 240),
+        Pin::White => Color32::from_gray(250),
+        Pin::Amber => Color32::from_rgb(255, 170, 40),
+        Pin::Uv => Color32::from_rgb(150, 70, 255),
+        Pin::Cmy => Color32::from_rgb(0, 200, 200),
+        Pin::Colour => Color32::from_rgb(230, 110, 200),
+        Pin::Pan => Color32::from_rgb(40, 150, 140),
+        Pin::Tilt => Color32::from_rgb(30, 110, 160),
+        Pin::Gobo => Color32::from_rgb(170, 140, 90),
+        Pin::Prism => Color32::from_rgb(140, 120, 190),
+        Pin::Strobe => Color32::from_rgb(250, 230, 120),
+        Pin::Beam => Color32::from_rgb(120, 140, 110),
+        Pin::Speed | Pin::Effect | Pin::Other => Color32::from_gray(90),
+    }
+}
+
+/// A row of small coloured ticks, one per channel.
+pub fn pinout(ui: &mut egui::Ui, pins: &[Pin], max: usize) -> egui::Response {
+    let n = pins.len().min(max);
+    let (w, h) = (6.0, 9.0);
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(n as f32 * (w + 1.0) + if pins.len() > max { 12.0 } else { 0.0 }, h), Sense::hover());
+    for (i, p) in pins.iter().take(n).enumerate() {
+        let x = r.min.x + i as f32 * (w + 1.0);
+        ui.painter().rect_filled(egui::Rect::from_min_size(egui::pos2(x, r.min.y), egui::vec2(w, h)), 1.0, pin_color(*p));
+    }
+    if pins.len() > max {
+        ui.painter().text(egui::pos2(r.max.x - 10.0, r.center().y), egui::Align2::LEFT_CENTER, "…", egui::FontId::proportional(10.0), crate::theme::current().weak);
+    }
+    resp.on_hover_ui(|ui| {
+        let mut counts: Vec<(Pin, usize)> = Vec::new();
+        for p in pins {
+            match counts.iter_mut().find(|(q, _)| q == p) {
+                Some(c) => c.1 += 1,
+                None => counts.push((*p, 1)),
+            }
+        }
+        ui.label(format!("{} channels", pins.len()));
+        for (p, c) in counts {
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
+                ui.painter().rect_filled(r, 1.0, pin_color(p));
+                ui.label(if c > 1 { format!("{} ×{c}", p.name()) } else { p.name().to_string() });
+            });
+        }
+    })
+}
+
+/// One fixture in the library list: name, type, channel counts per mode, and
+/// the pinout of the mode a search points at (or the first mode).
+fn lib_row(ui: &mut egui::Ui, lib: &Library, i: usize, selected: bool, query: &str) -> egui::Response {
+    let t = crate::theme::current();
+    let e = &lib.entries[i];
+    let fill = if selected { t.raised } else { Color32::TRANSPARENT };
+    let inner = egui::Frame::new().fill(fill).corner_radius(t.radius).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let mut name = RichText::new(format!("{} — {}", e.manufacturer, e.model));
+        if e.origin() == "your files" {
+            name = name.color(t.accent);
+        }
+        ui.label(name);
+        if let Some(m) = &e.meta {
+            ui.horizontal(|ui| {
+                let counts = e.channel_counts().iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" / ");
+                ui.label(RichText::new(format!("{} · {counts} ch", m.kind_label())).color(t.weak).size(t.text_size - 2.0));
+                let mode = lib.preferred_mode(i, query).unwrap_or(0);
+                if let Some(md) = m.modes.get(mode) {
+                    pinout(ui, &md.pins, 32);
+                }
+                if !m.drivable() {
+                    ui.label(RichText::new("not driven yet").color(t.warn).size(t.text_size - 3.0));
+                }
+            });
+        }
+    });
+    let resp = ui.interact(inner.response.rect, ui.scope_id().with(("librow", i)), Sense::click());
+    if resp.hovered() && !selected {
+        ui.painter().rect_stroke(inner.response.rect, t.radius, egui::Stroke::new(1.0, t.line), egui::StrokeKind::Inside);
+    }
+    resp
+}
+
 /// The library browser. Returns a type to add, and whether to also place it.
 fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
     let mut result = None;
@@ -240,9 +329,12 @@ fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
     ui.horizontal(|ui| {
         ui.add(
             egui::TextEdit::singleline(&mut st.query)
-                .hint_text(format!("Search {total} fixtures: brand or model"))
-                .desired_width(300.0),
-        );
+                .hint_text(format!("Search {total} fixtures: brand, model, type or channels"))
+                .desired_width(320.0),
+        )
+        .on_hover_text("Try \"16 channel moving head\", \"par 7ch\", \"pixel bar\" or \"chauvet slimpar\".");
+        ui.checkbox(&mut st.drivable_only, "Only lights Kickline can drive")
+            .on_hover_text("Hide fixtures with no colour or dimmer channels (smoke machines, lasers, pan/tilt-only…). Moving-head control is planned.");
         if ui.button("Rescan folders").clicked() {
             st.library = None;
             st.entry = None;
@@ -250,7 +342,8 @@ fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
         }
     });
     let q = st.query.clone();
-    let hits = st.library().search(&q, 300);
+    let drivable_only = st.drivable_only;
+    let hits = st.library().search_filtered(&q, 300, drivable_only);
     ui.columns(2, |cols| {
         let ui = &mut cols[0];
         egui::ScrollArea::vertical().id_salt("libhits").max_height(420.0).show(ui, |ui| {
@@ -258,18 +351,17 @@ fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
             {
                 let lib = st.library.as_ref().unwrap();
                 for &i in &hits {
-                    let e = &lib.entries[i];
-                    let mut text = RichText::new(format!("{} — {}", e.manufacturer, e.model));
-                    if e.origin() == "your files" {
-                        text = text.color(crate::theme::current().accent);
-                    }
-                    if ui.selectable_label(st.entry == Some(i), text).clicked() {
+                    if lib_row(ui, lib, i, st.entry == Some(i), &q).clicked() {
                         pick = Some(i);
                     }
                 }
             }
             if let Some(i) = pick {
                 st.select_entry(i);
+                // Searching "16 ch" opens the 16-channel mode.
+                if let Some(m) = st.library.as_ref().and_then(|l| l.preferred_mode(i, &q)) {
+                    st.mode = m;
+                }
             }
             if hits.is_empty() {
                 ui.weak("Nothing found.");
@@ -299,6 +391,9 @@ fn browser(st: &mut State, ui: &mut egui::Ui) -> Option<(FixtureType, bool)> {
                 let src = st.library.as_ref().map(|l| l.source_label(st.entry.unwrap_or(0))).unwrap_or_default();
                 match f.to_type(st.mode, &src) {
                     Ok(t) => {
+                        if let Some(md) = st.entry.and_then(|i| st.library.as_ref()?.entries.get(i)?.meta.as_ref()?.modes.get(st.mode)) {
+                            pinout(ui, &md.pins, 64);
+                        }
                         let driven = f.driven_channels(st.mode);
                         ui.label(format!("{} pixel(s), {} of {} channels follow the image", t.pixel_count(), driven, t.footprint()));
                         if driven == 0 {

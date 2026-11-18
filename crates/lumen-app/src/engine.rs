@@ -91,6 +91,10 @@ pub struct Engine {
     /// Fixture test in progress: everything else dark, this fixture cycles
     /// red, green, blue, white, then a dot running from its first pixel.
     pub test: Option<FixtureTest>,
+    /// Is output actually working, right now? (for the status bar)
+    pub health: OutputHealth,
+    /// Universe sweep in progress (no fixtures needed).
+    pub sweep: Option<Sweep>,
     /// Per drum (kick, snare, hi-hat): latest rise and the rise needed for a hit (dB).
     pub onset: [(f32, f32); 3],
     /// When each lumiverse last sent, for its refresh-rate cap.
@@ -124,6 +128,8 @@ impl Engine {
             shutdown: false,
             test: None,
             onset: [(0.0, 0.0); 3],
+            sweep: None,
+            health: Default::default(),
             last_sent: Default::default(),
         }
     }
@@ -272,6 +278,18 @@ impl Engine {
                 }
             })
         };
+        if let Some(sw) = &self.sweep {
+            if let Some(l) = self.output.lumiverses.get(sw.lumiverse) {
+                let base = l.universe;
+                let on = sw.current();
+                // Only the swept lumiverse: one universe lit, the rest dark.
+                self.dmx.retain(|(lv, _), _| *lv != sw.lumiverse);
+                for k in 0..sw.count {
+                    let level = if k == on { sw.level } else { 0 };
+                    self.dmx.insert((sw.lumiverse, base + k), [level; UNIVERSE_SIZE]);
+                }
+            }
+        }
         Metrics::smooth(&mut self.metrics.dmx_ms, t.elapsed().as_secs_f32() * 1000.0);
         if !self.output_enabled {
             if self.sender.take().is_some() {
@@ -363,6 +381,22 @@ impl Engine {
             }
         }
         self.sender_stats = Some(sender.stats.clone());
+        {
+            let h = &mut self.health;
+            if sent > 0 {
+                h.last_ok = Some(now);
+            }
+            h.failing = errors.len();
+            if let Some(e) = errors.first() {
+                h.last_error = Some((now, e.clone()));
+            }
+            h.universes = self
+                .dmx
+                .keys()
+                .filter(|(lv, _)| sent_lv.contains(lv))
+                .map(|(lv, u)| (self.output.lumiverses.get(*lv).map(|l| l.protocol == lumen_fixtures::Protocol::Sacn).unwrap_or(false), *u))
+                .collect();
+        }
         self.routes = self.output.lumiverses.iter().map(|l| sender.route_state(l.interface.as_deref())).collect();
         for e in &errors {
             log::error("dmx", e.clone());
@@ -375,6 +409,95 @@ impl Engine {
         } else {
             format!("Sending {sent} universe(s) — {}", errors.join("; "))
         };
+    }
+}
+
+/// What the status bar needs to say whether output is alive.
+#[derive(Clone, Debug, Default)]
+pub struct OutputHealth {
+    pub last_ok: Option<Instant>,
+    pub last_error: Option<(Instant, String)>,
+    /// Sends that failed in the latest frame.
+    pub failing: usize,
+    /// (is sACN, universe) sent in the latest frame.
+    pub universes: Vec<(bool, u16)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputState {
+    Off,
+    /// Packets are leaving, no errors.
+    Live,
+    /// Some universes fail.
+    Partial,
+    /// Output is on but nothing has gone out for a moment.
+    Dead,
+    /// On, but nothing to send (no fixtures).
+    Idle,
+}
+
+impl OutputHealth {
+    pub fn state(&self, enabled: bool) -> OutputState {
+        if !enabled {
+            return OutputState::Off;
+        }
+        let ok_recent = self.last_ok.is_some_and(|t| t.elapsed() < Duration::from_millis(600));
+        let err_recent = self.last_error.as_ref().is_some_and(|(t, _)| t.elapsed() < Duration::from_millis(600));
+        match (ok_recent, err_recent) {
+            (true, false) => OutputState::Live,
+            (true, true) => OutputState::Partial,
+            (false, true) => OutputState::Dead,
+            (false, false) if self.universes.is_empty() && self.last_error.is_none() => OutputState::Idle,
+            (false, false) => OutputState::Dead,
+        }
+    }
+}
+
+/// "0–3, 10, 12–13": universes as short ranges.
+pub fn universe_ranges(mut u: Vec<u16>) -> String {
+    u.sort_unstable();
+    u.dedup();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < u.len() {
+        let start = u[i];
+        let mut end = start;
+        while i + 1 < u.len() && u[i + 1] == end + 1 {
+            i += 1;
+            end = u[i];
+        }
+        out.push(if start == end { start.to_string() } else { format!("{start}–{end}") });
+        i += 1;
+    }
+    out.join(", ")
+}
+
+/// Lights each universe of a lumiverse in turn, so you can see the cable,
+/// controller and lights work before adding any fixtures.
+#[derive(Clone, Copy, Debug)]
+pub struct Sweep {
+    pub lumiverse: usize,
+    /// How many universes, starting at the lumiverse's own.
+    pub count: u16,
+    /// Value sent on every channel of the lit universe.
+    pub level: u8,
+    pub started: Instant,
+    /// Stay on this one (manual stepping) instead of moving on by itself.
+    pub hold: Option<u16>,
+}
+
+impl Sweep {
+    pub const STEP: f32 = 1.5;
+
+    pub fn new(lumiverse: usize, count: u16) -> Self {
+        Sweep { lumiverse, count: count.max(1), level: 128, started: Instant::now(), hold: None }
+    }
+    /// Offset (0-based) of the universe that's lit right now.
+    pub fn current(&self) -> u16 {
+        match self.hold {
+            Some(h) => h % self.count,
+            None => ((self.started.elapsed().as_secs_f32() / Self::STEP) as u16) % self.count,
+        }
     }
 }
 
@@ -507,6 +630,31 @@ fn run(engine: Arc<Mutex<Engine>>) {
             }
         }
         e.tick(woke);
+    }
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+
+    #[test]
+    fn ranges() {
+        assert_eq!(universe_ranges(vec![3, 0, 1, 2, 10, 12, 13]), "0–3, 10, 12–13");
+        assert_eq!(universe_ranges(vec![5]), "5");
+    }
+
+    #[test]
+    fn states() {
+        let mut h = OutputHealth::default();
+        assert_eq!(h.state(false), OutputState::Off);
+        assert_eq!(h.state(true), OutputState::Idle);
+        h.last_ok = Some(Instant::now());
+        h.universes = vec![(false, 0)];
+        assert_eq!(h.state(true), OutputState::Live);
+        h.last_error = Some((Instant::now(), "x".into()));
+        assert_eq!(h.state(true), OutputState::Partial);
+        h.last_ok = Some(Instant::now() - Duration::from_secs(2));
+        assert_eq!(h.state(true), OutputState::Dead);
     }
 }
 

@@ -20,6 +20,7 @@ pub struct State {
     ports: Vec<lumen_output::NetIface>,
     ports_at: Option<std::time::Instant>,
     find_nodes: bool,
+    sweep_count: u16,
 }
 
 struct ArrayForm {
@@ -182,7 +183,85 @@ fn nodes_list(o: &mut AdvancedOutput, st: &mut State, nodes: &[SeenNode], watche
     });
 }
 
-fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_output::RouteState], nodes: &[SeenNode], watcher: &lumen_output::NodeWatcher, ui: &mut egui::Ui) {
+/// Art-Net's own way of writing a universe: Net : Sub-Net : Universe.
+pub fn artnet_address(u: u16) -> String {
+    format!("{}:{}:{}", u >> 8, (u >> 4) & 15, u & 15)
+}
+
+/// "Sweep universes": light each universe in turn, no fixtures needed.
+fn sweep_panel(o: &AdvancedOutput, lv: usize, sweep: &mut Option<crate::engine::Sweep>, out_on: &mut bool, count: &mut u16, ui: &mut egui::Ui) {
+    let t = crate::theme::current();
+    let Some(l) = o.lumiverses.get(lv) else { return };
+    if *count == 0 {
+        *count = 4;
+    }
+    let mine = sweep.as_ref().is_some_and(|s| s.lumiverse == lv);
+    ui.add_space(4.0);
+    if !mine {
+        ui.horizontal(|ui| {
+            if ui
+                .button("Sweep universes")
+                .on_hover_text("Check the cable, controller and lights before adding fixtures: lights every channel of one universe at a time (half brightness), moving on every 1.5 s. Everything else on this lumiverse is dark while it runs.")
+                .clicked()
+            {
+                *sweep = Some(crate::engine::Sweep::new(lv, *count));
+                *out_on = true;
+            }
+            ui.label("first");
+            ui.add(egui::DragValue::new(count).range(1..=64));
+            ui.label("universes");
+        });
+        return;
+    }
+    let mut stop = false;
+    let sw = sweep.as_mut().expect("mine");
+    let cur = sw.current();
+    let u = l.universe + cur;
+    egui::Frame::new().fill(t.raised).corner_radius(t.radius).inner_margin(8).show(ui, |ui| {
+        ui.label(egui::RichText::new(format!("Universe {u} is on now ({} of {})", cur + 1, sw.count)).font(crate::theme::bold(t.text_size + 1.0)));
+        ui.weak(format!("Art-Net {} · sACN {}", artnet_address(u), u + 1));
+        ui.weak("Whatever lights up is listening to this universe. Nothing at all? Check the IP, network port and that the controller is in Art-Net/sACN mode. Lights up one step late or early? The controller counts universes from 1: change Universe above.");
+        ui.label(egui::RichText::new("Moving heads and strobes will move or flash during the sweep.").color(t.warn));
+        ui.horizontal(|ui| {
+            if ui.button("◀").clicked() {
+                sw.hold = Some((cur + sw.count - 1) % sw.count);
+            }
+            if ui.button("▶").clicked() {
+                sw.hold = Some((cur + 1) % sw.count);
+            }
+            if sw.hold.is_some() {
+                if ui.button("Auto").on_hover_text("Move on by itself every 1.5 s").clicked() {
+                    sw.hold = None;
+                    sw.started = std::time::Instant::now() - std::time::Duration::from_secs_f32(crate::engine::Sweep::STEP * cur as f32);
+                }
+            } else if ui.button("Hold").on_hover_text("Stay on this universe").clicked() {
+                sw.hold = Some(cur);
+            }
+            let mut full = sw.level == 255;
+            if ui.checkbox(&mut full, "Full brightness").changed() {
+                sw.level = if full { 255 } else { 128 };
+            }
+        });
+        if ui.add(egui::Button::new(egui::RichText::new("Stop sweep").color(t.on_accent)).fill(t.accent)).clicked() {
+            stop = true;
+        }
+    });
+    if stop {
+        *sweep = None;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lumiverse_panel(
+    o: &mut AdvancedOutput,
+    st: &mut State,
+    routes: &[lumen_output::RouteState],
+    nodes: &[SeenNode],
+    watcher: &lumen_output::NodeWatcher,
+    sweep: &mut Option<crate::engine::Sweep>,
+    out_on: &mut bool,
+    ui: &mut egui::Ui,
+) {
     if st.ports_at.is_none_or(|t| t.elapsed().as_secs() >= 3) {
         st.ports = lumen_output::interfaces();
         st.ports_at = Some(std::time::Instant::now());
@@ -238,6 +317,7 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_outpu
         ));
         st.lumiverse = o.lumiverses.len() - 1;
     }
+    let mut sweep_here = false;
     if let Some(l) = o.lumiverses.get_mut(st.lumiverse) {
         ui.add_space(4.0);
         egui::Grid::new("lv")
@@ -316,6 +396,7 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_outpu
             }
             _ => {}
         }
+        sweep_here = true;
         if let (Some(n), Ok(ip)) = (&l.interface, l.target.trim().parse::<std::net::Ipv4Addr>()) {
             if let Some(p) = st.ports.iter().find(|p| &p.name == n) {
                 if ip != std::net::Ipv4Addr::BROADCAST && !p.contains(ip) && l.protocol == Protocol::ArtNet {
@@ -333,6 +414,10 @@ fn lumiverse_panel(o: &mut AdvancedOutput, st: &mut State, routes: &[lumen_outpu
                 (l.universe + 1) & 0xff
             ));
         }
+    }
+    if sweep_here {
+        let lv = st.lumiverse;
+        sweep_panel(o, lv, sweep, out_on, &mut st.sweep_count, ui);
     }
 
     ui.separator();
@@ -512,6 +597,51 @@ fn array_form(o: &mut AdvancedOutput, st: &mut State, ui: &mut egui::Ui) {
     });
 }
 
+/// The selected fixture's channels as they're being sent right now.
+fn live_channels(o: &AdvancedOutput, dmx: &std::collections::BTreeMap<(usize, u16), [u8; lumen_fixtures::UNIVERSE_SIZE]>, out_on: bool, idx: usize, ui: &mut egui::Ui) {
+    let t = crate::theme::current();
+    let fx = &o.fixtures[idx];
+    let map = o.channel_map(fx);
+    if map.is_empty() {
+        return;
+    }
+    egui::CollapsingHeader::new(egui::RichText::new(format!("Live channels ({})", map.len())).font(crate::theme::bold(t.text_size)))
+        .id_salt("live_ch")
+        .default_open(true)
+        .show(ui, |ui| {
+            if !out_on {
+                ui.weak("DMX output is off: these are the values that would be sent.");
+            }
+            const SHOW: usize = 48;
+            egui::ScrollArea::vertical().max_height(190.0).id_salt("live_ch_scroll").show(ui, |ui| {
+                egui::Grid::new("live_ch_grid").num_columns(4).spacing([10.0, 2.0]).striped(true).show(ui, |ui| {
+                    for ch in map.iter().take(SHOW) {
+                        let v = dmx.get(&(fx.lumiverse, ch.universe)).map(|u| u[ch.address as usize - 1]).unwrap_or(0);
+                        ui.monospace(format!("U{} {:>3}", ch.universe, ch.address));
+                        ui.label(&ch.label);
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(110.0, 10.0), Sense::hover());
+                        ui.painter().rect_filled(r, 2.0, t.raised);
+                        let col = match ch.func {
+                            lumen_fixtures::ChannelFn::Red => Color32::from_rgb(230, 60, 60),
+                            lumen_fixtures::ChannelFn::Green => Color32::from_rgb(60, 200, 90),
+                            lumen_fixtures::ChannelFn::Blue => Color32::from_rgb(70, 120, 240),
+                            lumen_fixtures::ChannelFn::White => Color32::from_gray(230),
+                            lumen_fixtures::ChannelFn::Amber => Color32::from_rgb(255, 170, 40),
+                            lumen_fixtures::ChannelFn::Fixed(_) => t.weak,
+                            _ => t.accent,
+                        };
+                        ui.painter().rect_filled(egui::Rect::from_min_size(r.min, egui::vec2(r.width() * v as f32 / 255.0, r.height())), 2.0, col);
+                        ui.monospace(format!("{v:>3}"));
+                        ui.end_row();
+                    }
+                });
+                if map.len() > SHOW {
+                    ui.weak(format!("…and {} more channels. The DMX Monitor shows every universe in full.", map.len() - SHOW));
+                }
+            });
+        });
+}
+
 /// "Test this light": solo one fixture and walk through colours and wiring.
 pub fn test_row(test: &mut Option<crate::engine::FixtureTest>, output_on: &mut bool, fixture: usize, ui: &mut egui::Ui) {
     let t = crate::theme::current();
@@ -639,9 +769,9 @@ fn fixture_props(o: &mut AdvancedOutput, idx: usize, ui: &mut egui::Ui) -> bool 
 
 pub fn ui(app: &mut View, ui: &mut egui::Ui) {
     let View { e, s } = app;
-    let (output, frame, st, routes) = (&mut e.output, &e.frame, &mut s.ao, &e.routes);
+    let (output, frame, st, routes, dmx) = (&mut e.output, &e.frame, &mut s.ao, &e.routes, &e.dmx);
     let (windows, fe) = (&mut s.windows, &mut s.fe);
-    let (test, out_on) = (&mut e.test, &mut e.output_enabled);
+    let (test, out_on, sweep) = (&mut e.test, &mut e.output_enabled, &mut e.sweep);
     let watcher = s.nodes.clone();
     let nodes = watcher.nodes();
     let mut edit_type = None;
@@ -650,7 +780,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
         .default_size(290.0)
         .resizable(true)
         .show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| lumiverse_panel(output, st, routes, &nodes, &watcher, ui));
+            egui::ScrollArea::vertical().show(ui, |ui| lumiverse_panel(output, st, routes, &nodes, &watcher, sweep, out_on, ui));
         });
 
     egui::CentralPanel::default().show(ui, |ui| {
@@ -658,7 +788,9 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
             ui.label("Drag to move · corner handle to resize · round handle to rotate");
             ui.checkbox(&mut st.show_pixels, "Show pixel colours");
         });
-        let avail = ui.available_size() - Vec2::new(0.0, 70.0);
+        // Leave room under the canvas for the selected fixture's settings and live channels.
+        let below = if st.selected.is_some_and(|i| i < output.fixtures.len()) { 330.0 } else { 70.0 };
+        let avail = ui.available_size() - Vec2::new(0.0, below);
         let w = avail.x.min(avail.y.max(100.0) * aspect);
         let (resp, painter) =
             ui.allocate_painter(Vec2::new(w, w / aspect), Sense::click_and_drag());
@@ -810,6 +942,8 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                 }
                 ui.add_space(4.0);
                 test_row(test, out_on, i, ui);
+                ui.add_space(4.0);
+                live_channels(output, dmx, *out_on, i, ui);
             }
             None => {
                 ui.weak("Click a fixture to edit it, or add one from the list on the left.");

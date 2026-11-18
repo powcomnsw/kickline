@@ -331,6 +331,17 @@ fn yes() -> bool {
 }
 
 /// A fixture placed on the canvas. Coordinates are normalised (0..1).
+/// One DMX channel of a placed fixture.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChannelInfo {
+    pub label: String,
+    pub func: ChannelFn,
+    /// Absolute universe.
+    pub universe: u16,
+    /// 1-based DMX address.
+    pub address: u16,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Fixture {
     pub name: String,
@@ -639,6 +650,41 @@ impl AdvancedOutput {
                 bytes.clear();
                 t.encode_pixel(f(at(fi, i, n, lx, ly), fx.sample_cell(self.aspect, t, frame, lx, ly)), fx.white, &mut bytes);
                 write(&mut out, fx.lumiverse, lv.universe + seg.universe_offset, seg.start, &bytes);
+            }
+        }
+        out
+    }
+
+    /// Every channel a fixture uses, in order: what it does and where it is.
+    /// Mirrors how `render_dmx` lays the bytes out.
+    pub fn channel_map(&self, fx: &Fixture) -> Vec<ChannelInfo> {
+        let mut out = Vec::new();
+        let (Some(t), Some(lv)) = (self.types.get(fx.type_id), self.lumiverses.get(fx.lumiverse)) else { return out };
+        let segs = self.layout(fx);
+        if let Some(slots) = &t.slots {
+            let Some(seg) = segs.first() else { return out };
+            for (i, sl) in slots.iter().enumerate() {
+                out.push(ChannelInfo {
+                    label: sl.name.clone(),
+                    func: sl.func,
+                    universe: lv.universe + seg.universe_offset,
+                    address: (seg.start + i + 1) as u16,
+                });
+            }
+            return out;
+        }
+        let mut it = segs.iter();
+        if !t.header.is_empty() {
+            if let Some(seg) = it.next() {
+                for (i, f) in t.header.iter().enumerate() {
+                    out.push(ChannelInfo { label: f.name().to_string(), func: *f, universe: lv.universe + seg.universe_offset, address: (seg.start + i + 1) as u16 });
+                }
+            }
+        }
+        for (p, seg) in it.enumerate() {
+            for (i, f) in t.pixel.iter().enumerate() {
+                let label = if t.pixel_count() > 1 { format!("Pixel {} {}", p + 1, f.name()) } else { f.name().to_string() };
+                out.push(ChannelInfo { label, func: *f, universe: lv.universe + seg.universe_offset, address: (seg.start + i + 1) as u16 });
             }
         }
         out
@@ -1154,6 +1200,28 @@ mod tests {
         let lit: usize = solo.values().map(|u| u.iter().filter(|&&b| b > 0).count()).sum();
         let t = &o.types[o.fixtures[0].type_id];
         assert_eq!(lit, t.pixel_count(), "one red channel per pixel of fixture 0 only");
+    }
+
+    #[test]
+    fn channel_map_matches_render() {
+        let o = AdvancedOutput::demo();
+        let frame = Frame::new(8, 8, Rgba::rgb(1.0, 0.0, 0.0));
+        let dmx = o.render_dmx(&frame);
+        for fx in &o.fixtures {
+            let map = o.channel_map(fx);
+            assert_eq!(map.len(), o.types[fx.type_id].footprint(), "{}", fx.name);
+            for ch in &map {
+                // Red channels of a red frame carry light; blue ones don't.
+                let lv = fx.lumiverse;
+                let v = dmx[&(lv, ch.universe)][ch.address as usize - 1];
+                if ch.func == ChannelFn::Blue {
+                    assert_eq!(v, 0, "{} {}", fx.name, ch.label);
+                }
+                if ch.func == ChannelFn::Red {
+                    assert!(v > 0, "{} {}", fx.name, ch.label);
+                }
+            }
+        }
     }
 
     #[test]
