@@ -263,12 +263,16 @@ fn lumiverse_panel(
     sweep: &mut Option<crate::engine::Sweep>,
     out_on: &mut bool,
     ui: &mut egui::Ui,
+    list: bool,
+    settings: bool,
 ) {
     if st.ports_at.is_none_or(|t| t.elapsed().as_secs() >= 3) {
         st.ports = lumen_output::interfaces();
         st.ports_at = Some(std::time::Instant::now());
     }
     let t = crate::theme::current();
+    let statuses: Vec<NodeStatus> = (0..o.lumiverses.len()).map(|i| node_status(o, i, nodes)).collect();
+    if list {
     ui.horizontal(|ui| {
         ui.heading("Lumiverses").on_hover_text("A lumiverse is one output: where the data goes (a controller's IP), how (Art-Net or sACN) and from which universe. Most rigs need one per controller.");
         if ui.add(egui::Button::new("Find nodes").selected(st.find_nodes)).on_hover_text("List the Art-Net nodes on your network").clicked() {
@@ -280,7 +284,6 @@ fn lumiverse_panel(
         nodes_list(o, st, nodes, watcher, ui);
         ui.add_space(4.0);
     }
-    let statuses: Vec<NodeStatus> = (0..o.lumiverses.len()).map(|i| node_status(o, i, nodes)).collect();
     let mut remove = None;
     for (i, l) in o.lumiverses.iter().enumerate() {
         ui.horizontal(|ui| {
@@ -319,6 +322,8 @@ fn lumiverse_panel(
         ));
         st.lumiverse = o.lumiverses.len() - 1;
     }
+    }
+    if settings {
     let mut sweep_here = false;
     if let Some(l) = o.lumiverses.get_mut(st.lumiverse) {
         ui.add_space(4.0);
@@ -422,7 +427,11 @@ fn lumiverse_panel(
         sweep_panel(o, lv, sweep, out_on, &mut st.sweep_count, ui);
     }
 
-    ui.separator();
+    }
+    if !list {
+        return;
+    }
+    ui.add_space(8.0);
     ui.heading("Fixtures");
     let conflicts = o.conflicts();
     egui::ScrollArea::vertical()
@@ -671,103 +680,111 @@ pub fn test_row(test: &mut Option<crate::engine::FixtureTest>, output_on: &mut b
     });
 }
 
-/// Returns true when "Edit type" was clicked.
-fn fixture_props(o: &mut AdvancedOutput, idx: usize, ui: &mut egui::Ui) -> bool {
+/// The selected fixture in the inspector: test and live values first, the
+/// rest in folding sections. Returns true when "Edit type" was clicked.
+fn fixture_inspector(
+    o: &mut AdvancedOutput,
+    idx: usize,
+    test: &mut Option<crate::engine::FixtureTest>,
+    out_on: &mut bool,
+    dmx: &std::collections::BTreeMap<(usize, u16), [u8; lumen_fixtures::UNIVERSE_SIZE]>,
+    ui: &mut egui::Ui,
+) -> bool {
+    let t = crate::theme::current();
     let mut edit = false;
-    let base = o.lumiverses.get(o.fixtures[idx].lumiverse).map(|l| l.universe).unwrap_or(0);
-    let has_white = o.types.get(o.fixtures[idx].type_id).is_some_and(|t| {
-        t.pixel.contains(&lumen_fixtures::ChannelFn::White)
-            || t.slots.as_ref().is_some_and(|s| s.iter().any(|x| x.func == lumen_fixtures::ChannelFn::White))
-    });
     let range = o.range_label(&o.fixtures[idx]);
-    let types: Vec<String> = o.types.iter().map(|t| t.name.clone()).collect();
-    let lvs: Vec<String> = o
-        .lumiverses
-        .iter()
-        .map(|l| format!("{} (U{})", l.name, l.universe))
-        .collect();
-    let fx = &mut o.fixtures[idx];
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Name");
-        ui.add(egui::TextEdit::singleline(&mut fx.name).desired_width(140.0));
-        ui.label("Type");
-        egui::ComboBox::from_id_salt("fxtype")
-            .selected_text(types.get(fx.type_id).cloned().unwrap_or_default())
-            .show_ui(ui, |ui| {
-                for (i, t) in types.iter().enumerate() {
-                    ui.selectable_value(&mut fx.type_id, i, t);
-                }
-            });
-        ui.label("Lumiverse").on_hover_text("Which output (controller) this light is connected to.");
-        egui::ComboBox::from_id_salt("fxlv")
-            .selected_text(lvs.get(fx.lumiverse).cloned().unwrap_or_default())
-            .show_ui(ui, |ui| {
-                for (i, l) in lvs.iter().enumerate() {
-                    ui.selectable_value(&mut fx.lumiverse, i, l);
-                }
-            });
-        if ui.small_button("Edit type").on_hover_text("Open this fixture's type in the Fixture Editor").clicked() {
+    let type_name = o.types.get(o.fixtures[idx].type_id).map(|t| t.name.clone()).unwrap_or_default();
+    let lv_name = o.lumiverses.get(o.fixtures[idx].lumiverse).map(|l| l.name.clone()).unwrap_or_default();
+    ui.add(egui::TextEdit::singleline(&mut o.fixtures[idx].name).font(crate::theme::bold(t.text_size + 4.0)).frame(egui::Frame::NONE));
+    ui.weak(format!("{type_name} · {lv_name} · {range}"));
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        test_row(test, out_on, idx, ui);
+        if test.is_none_or(|x| x.fixture != idx) && ui.button("Edit type").on_hover_text("Open this fixture's type in the Fixture library").clicked() {
             edit = true;
         }
-        ui.label("Universe").on_hover_text("A universe is 512 channels: about 170 RGB pixels, or one controller output. Kickline counts from 0; if your controller counts from 1, add one.");
-        let mut abs = base + fx.universe_offset;
-        if ui.add(egui::DragValue::new(&mut abs).range(base..=32767)).changed() {
-            fx.universe_offset = abs.saturating_sub(base);
-        }
-        ui.label("Address").on_hover_text("The DMX start channel (1–512) within the universe: the first channel this light listens to. On most lights it's set with buttons or DIP switches.");
-        ui.add(egui::DragValue::new(&mut fx.address).range(1..=512));
-        ui.weak(range);
     });
-    ui.horizontal_wrapped(|ui| {
-        ui.label("X");
-        ui.add(
-            egui::DragValue::new(&mut fx.x)
-                .speed(0.002)
-                .range(-0.5..=1.5)
-                .max_decimals(3),
-        );
-        ui.label("Y");
-        ui.add(
-            egui::DragValue::new(&mut fx.y)
-                .speed(0.002)
-                .range(-0.5..=1.5)
-                .max_decimals(3),
-        );
-        ui.label("W");
-        ui.add(
-            egui::DragValue::new(&mut fx.w)
-                .speed(0.002)
-                .range(0.005..=2.0)
-                .max_decimals(3),
-        );
-        ui.label("H");
-        ui.add(
-            egui::DragValue::new(&mut fx.h)
-                .speed(0.002)
-                .range(0.005..=2.0)
-                .max_decimals(3),
-        );
-        ui.label("Rotation");
-        ui.add(
-            egui::DragValue::new(&mut fx.rotation)
-                .speed(0.5)
-                .range(-360.0..=360.0)
-                .max_decimals(1)
-                .suffix("°"),
-        );
-        ui.checkbox(&mut fx.snake, "Snake").on_hover_text("For panels wired back and forth: every other row runs the opposite way.");
-        ui.checkbox(&mut fx.reverse, "Reverse").on_hover_text("The data enters at the other end. Tick it if effects run the wrong way along the strip.");
-        if has_white {
-            ui.label("White").on_hover_text("For RGBW lights: how white and pale colours are made. White only uses the white LEDs (cleanest), RGB + white is brightest, RGB only ignores the white LEDs.");
-            egui::ComboBox::from_id_salt("fxwhite").selected_text(fx.white.name()).show_ui(ui, |ui| {
-                for m in lumen_fixtures::WhiteMode::ALL {
-                    ui.selectable_value(&mut fx.white, m, m.name());
+    if test.is_some_and(|x| x.fixture == idx) {
+        // test_row shows the instructions under the stop button when running
+    }
+    ui.add_space(6.0);
+    live_channels(o, dmx, *out_on, idx, ui);
+    ui.add_space(4.0);
+    let base = o.lumiverses.get(o.fixtures[idx].lumiverse).map(|l| l.universe).unwrap_or(0);
+    let has_white = o.types.get(o.fixtures[idx].type_id).is_some_and(|t| {
+        t.pixel.contains(&lumen_fixtures::ChannelFn::White) || t.slots.as_ref().is_some_and(|s| s.iter().any(|x| x.func == lumen_fixtures::ChannelFn::White))
+    });
+    let types: Vec<String> = o.types.iter().map(|t| t.name.clone()).collect();
+    let lvs: Vec<String> = o.lumiverses.iter().map(|l| format!("{} (U{})", l.name, l.universe)).collect();
+    let fx = &mut o.fixtures[idx];
+    egui::CollapsingHeader::new(egui::RichText::new("Address").font(crate::theme::bold(t.text_size)))
+        .id_salt("insp_addr")
+        .default_open(true)
+        .show(ui, |ui| {
+            egui::Grid::new("insp_addr_g").num_columns(2).spacing([10.0, 5.0]).show(ui, |ui| {
+                ui.label("Output").on_hover_text("Which output (controller) this light is connected to.");
+                egui::ComboBox::from_id_salt("fxlv").selected_text(lvs.get(fx.lumiverse).cloned().unwrap_or_default()).show_ui(ui, |ui| {
+                    for (i, l) in lvs.iter().enumerate() {
+                        ui.selectable_value(&mut fx.lumiverse, i, l);
+                    }
+                });
+                ui.end_row();
+                ui.label("Universe").on_hover_text("A universe is 512 channels: about 170 RGB pixels, or one controller output. Kickline counts from 0; if your controller counts from 1, add one.");
+                let mut abs = base + fx.universe_offset;
+                if ui.add(egui::DragValue::new(&mut abs).range(base..=32767)).changed() {
+                    fx.universe_offset = abs.saturating_sub(base);
                 }
+                ui.end_row();
+                ui.label("Address").on_hover_text("The DMX start channel (1–512) within the universe: the first channel this light listens to.");
+                ui.add(egui::DragValue::new(&mut fx.address).range(1..=512));
+                ui.end_row();
+                ui.label("Type");
+                egui::ComboBox::from_id_salt("fxtype").selected_text(types.get(fx.type_id).cloned().unwrap_or_default()).show_ui(ui, |ui| {
+                    for (i, t) in types.iter().enumerate() {
+                        ui.selectable_value(&mut fx.type_id, i, t);
+                    }
+                });
+                ui.end_row();
             });
-        }
-    });
+        });
+    egui::CollapsingHeader::new(egui::RichText::new("Position & size").font(crate::theme::bold(t.text_size)))
+        .id_salt("insp_pos")
+        .show(ui, |ui| {
+            egui::Grid::new("insp_pos_g").num_columns(4).spacing([8.0, 5.0]).show(ui, |ui| {
+                ui.label("X");
+                ui.add(egui::DragValue::new(&mut fx.x).speed(0.002).range(-0.5..=1.5).max_decimals(3));
+                ui.label("Y");
+                ui.add(egui::DragValue::new(&mut fx.y).speed(0.002).range(-0.5..=1.5).max_decimals(3));
+                ui.end_row();
+                ui.label("W");
+                ui.add(egui::DragValue::new(&mut fx.w).speed(0.002).range(0.005..=2.0).max_decimals(3));
+                ui.label("H");
+                ui.add(egui::DragValue::new(&mut fx.h).speed(0.002).range(0.005..=2.0).max_decimals(3));
+                ui.end_row();
+                ui.label("Rotation");
+                ui.add(egui::DragValue::new(&mut fx.rotation).speed(0.5).suffix("°"));
+                ui.end_row();
+            });
+        });
+    egui::CollapsingHeader::new(egui::RichText::new("Wiring & colour").font(crate::theme::bold(t.text_size)))
+        .id_salt("insp_wire")
+        .show(ui, |ui| {
+            ui.checkbox(&mut fx.snake, "Snake").on_hover_text("For panels wired back and forth: every other row runs the opposite way.");
+            ui.checkbox(&mut fx.reverse, "Reverse").on_hover_text("The data enters at the other end. Tick it if effects run the wrong way along the strip.");
+            if has_white {
+                ui.horizontal(|ui| {
+                    ui.label("White").on_hover_text("For RGBW lights: how white and pale colours are made.");
+                    egui::ComboBox::from_id_salt("fxwhite").selected_text(fx.white.name()).show_ui(ui, |ui| {
+                        for m in lumen_fixtures::WhiteMode::ALL {
+                            ui.selectable_value(&mut fx.white, m, m.name());
+                        }
+                    });
+                });
+            }
+        });
     edit
 }
+
 
 pub fn ui(app: &mut View, ui: &mut egui::Ui) {
     let View { e, s } = app;
@@ -782,7 +799,37 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
         .default_size(290.0)
         .resizable(true)
         .show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| lumiverse_panel(output, st, routes, &nodes, &watcher, sweep, out_on, ui));
+            egui::ScrollArea::vertical().show(ui, |ui| lumiverse_panel(output, st, routes, &nodes, &watcher, sweep, out_on, ui, true, false));
+        });
+
+    // Inspector: the selected fixture, or the selected output's settings.
+    egui::Panel::right("ao_inspector")
+        .default_size(310.0)
+        .resizable(true)
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("ao_insp").show(ui, |ui| match st.selected.filter(|&i| i < output.fixtures.len()) {
+                Some(i) => {
+                    if fixture_inspector(output, i, test, out_on, dmx, ui) {
+                        edit_type = Some(output.fixtures[i].type_id);
+                    }
+                    ui.add_space(8.0);
+                    if ui.small_button("Show this output's settings").clicked() {
+                        st.lumiverse = output.fixtures[i].lumiverse;
+                        st.selected = None;
+                    }
+                }
+                None => {
+                    let t = crate::theme::current();
+                    if let Some(l) = output.lumiverses.get(st.lumiverse) {
+                        ui.label(egui::RichText::new(&l.name).font(crate::theme::bold(t.text_size + 4.0)));
+                        ui.weak(format!("{} · universe {} · {}", l.protocol.name(), l.universe, l.target));
+                        ui.add_space(6.0);
+                    }
+                    lumiverse_panel(output, st, routes, &nodes, &watcher, sweep, out_on, ui, false, true);
+                    ui.add_space(8.0);
+                    ui.weak("Click a fixture on the canvas or in the list to edit it.");
+                }
+            });
         });
 
     egui::CentralPanel::default().show(ui, |ui| {
@@ -790,9 +837,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
             ui.label("Drag to move · corner handle to resize · round handle to rotate");
             ui.checkbox(&mut st.show_pixels, "Show pixel colours");
         });
-        // Leave room under the canvas for the selected fixture's settings and live channels.
-        let below = if st.selected.is_some_and(|i| i < output.fixtures.len()) { 330.0 } else { 70.0 };
-        let avail = ui.available_size() - Vec2::new(0.0, below);
+        let avail = ui.available_size() - Vec2::new(0.0, 8.0);
         let w = avail.x.min(avail.y.max(100.0) * aspect);
         let (resp, painter) =
             ui.allocate_painter(Vec2::new(w, w / aspect), Sense::click_and_drag());
@@ -936,21 +981,6 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
             }
         }
 
-        ui.add_space(4.0);
-        match st.selected.filter(|&i| i < output.fixtures.len()) {
-            Some(i) => {
-                if fixture_props(output, i, ui) {
-                    edit_type = Some(output.fixtures[i].type_id);
-                }
-                ui.add_space(4.0);
-                test_row(test, out_on, i, ui);
-                ui.add_space(4.0);
-                live_channels(output, dmx, *out_on, i, ui);
-            }
-            None => {
-                ui.weak("Click a fixture to edit it, or add one from the list on the left.");
-            }
-        }
     });
     if let Some(t) = edit_type {
         windows.fixture_editor = true;
