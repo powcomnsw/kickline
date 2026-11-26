@@ -65,6 +65,14 @@ impl Default for SyncSettings {
     }
 }
 
+/// A session being recorded for Diagnostics (see lumen_core::recording).
+pub struct Recorder {
+    pub rec: lumen_core::recording::Recording,
+    started: Instant,
+    /// The section the DJ last marked (0 none, 1 to 5).
+    pub mark: u8,
+}
+
 pub struct Engine {
     pub comp: Composition,
     pub output: AdvancedOutput,
@@ -105,6 +113,8 @@ pub struct Engine {
     /// preview: exactly what the lights get).
     pub lights: Vec<Vec<[u8; 3]>>,
     ticks: u32,
+    /// Session recording in progress.
+    pub recorder: Option<Recorder>,
 }
 
 impl Engine {
@@ -140,6 +150,7 @@ impl Engine {
             blackout: false,
             lights: Vec::new(),
             ticks: 0,
+            recorder: None,
         }
     }
 
@@ -149,6 +160,32 @@ impl Engine {
         self.metrics.audio_started = Some(Instant::now());
         self.metrics.hits_at_start = [0; 3];
         self.metrics.reset_audio();
+    }
+
+    /// Start recording what the analyser hears and what the clock says.
+    pub fn start_recording(&mut self, created: &str) {
+        let rec = lumen_core::recording::Recording::new(
+            env!("CARGO_PKG_VERSION"),
+            created,
+            &self.audio.label(),
+            self.link_status.as_ref().is_some_and(|l| l.peers > 0),
+            self.comp.director.genre.name(),
+        );
+        log::info("recording", "started");
+        self.recorder = Some(Recorder { rec, started: Instant::now(), mark: 0 });
+    }
+
+    /// Stop and hand back the recording.
+    pub fn stop_recording(&mut self) -> Option<lumen_core::recording::Recording> {
+        let r = self.recorder.take()?;
+        log::info("recording", format!("stopped after {:.0} s", r.rec.seconds()));
+        Some(r.rec)
+    }
+
+    pub fn mark_section(&mut self, mark: u8) {
+        if let Some(r) = &mut self.recorder {
+            r.mark = mark;
+        }
     }
 
     pub fn start_demo_audio(&mut self) {
@@ -255,6 +292,16 @@ impl Engine {
         self.metrics.sample_audio(&self.audio);
         self.comp.set_audio(self.bands);
         self.bands = self.comp.audio; // includes Beat/Bar from the clock
+        if let Some(r) = &mut self.recorder {
+            r.rec.push(lumen_core::recording::Frame {
+                t: r.started.elapsed().as_secs_f64(),
+                beat: self.comp.beat,
+                tempo: self.comp.bpm,
+                peers: self.link_status.as_ref().map_or(0, |l| l.peers as u32),
+                bands: self.comp.audio,
+                mark: r.mark,
+            });
+        }
     }
 
     fn send_dmx(&mut self) {
@@ -778,6 +825,23 @@ mod tests {
 
     /// Auto mode inside the real engine: it finds the show's groups, gives
     /// each its own motion, and the lights really get lit by it.
+    #[test]
+    fn a_session_can_be_recorded_with_marks() {
+        let mut e = Engine::new(Composition::new(32, 16, 6), AdvancedOutput::demo());
+        e.start_demo_audio();
+        e.start_recording("now");
+        e.mark_section(5);
+        for _ in 0..30 {
+            e.tick(false);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let rec = e.stop_recording().expect("was recording");
+        assert!(rec.frames.len() >= 30);
+        assert!(rec.frames.iter().all(|f| f.mark == 5));
+        assert!(rec.frames.windows(2).all(|w| w[1].t >= w[0].t));
+        assert!(e.stop_recording().is_none());
+    }
+
     #[test]
     fn auto_mode_drives_the_lights_per_group() {
         let mut out = AdvancedOutput::demo();

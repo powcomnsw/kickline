@@ -659,6 +659,15 @@ impl eframe::App for LumenApp {
             if ctx.input(|i| i.key_pressed(egui::Key::H) && !i.modifiers.command) {
                 v.e.comp.director_rt.hold = !v.e.comp.director_rt.hold;
             }
+            // While recording a session, 1 to 5 mark which part of the song is playing.
+            if v.e.recorder.is_some() {
+                use egui::Key::*;
+                for (i, k) in [Num0, Num1, Num2, Num3, Num4, Num5].into_iter().enumerate() {
+                    if ctx.input(|inp| inp.key_pressed(k)) {
+                        v.e.mark_section(i as u8);
+                    }
+                }
+            }
         }
         egui::Panel::top("top").show(ui, |ui| v.top_bar(ui));
         match v.mode {

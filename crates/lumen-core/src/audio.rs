@@ -102,7 +102,7 @@ impl AudioBand {
 }
 
 /// A snapshot of the analysis. All values 0..1.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AudioBands {
     pub values: [f32; 11],
     /// Running hit counters for Kick, Snare, HiHat, Beat, Bar. Consumers compare

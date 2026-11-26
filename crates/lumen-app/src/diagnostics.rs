@@ -241,6 +241,7 @@ pub struct State {
     pub nodes: Vec<NodeInfo>,
     rx: Option<Receiver<NetResult>>,
     pub last_export: Option<PathBuf>,
+    pub last_recording: Option<Result<PathBuf, String>>,
     pub note: String,
     pub include_project: bool,
     pub gpu: String,
@@ -1236,6 +1237,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
             ui.weak("copied");
         }
     });
+    record_ui(app, ui);
     if let Some(p) = app.diag.last_export.clone() {
         ui.horizontal(|ui| {
             ui.label(
@@ -1321,4 +1323,54 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                 }
             });
         });
+}
+
+/// "Record a session": saves what Kickline heard and the clock it used, with
+/// your marks of the real section (keys 1 to 5), so a misread can be
+/// reproduced and fixed without your rig.
+fn record_ui(app: &mut View, ui: &mut egui::Ui) {
+    ui.add_space(6.0);
+    ui.separator();
+    ui.strong("Record a session");
+    ui.weak("Play a few minutes of music. While it plays, press 1 Groove, 2 Melodic, 3 Build-up, 4 Pause, 5 Drop whenever the part changes (0 for none).");
+    if let Some(r) = &app.e.recorder {
+        let (secs, frames, mark) = (r.rec.seconds(), r.rec.frames.len(), r.mark);
+        let name = lumen_core::recording::section_for_mark(mark).map_or("no mark", |s| s.name());
+        ui.horizontal(|ui| {
+            if ui.button("Stop and save").clicked() {
+                if let Some(rec) = app.e.stop_recording() {
+                    app.diag.last_recording = Some(save_recording(&rec));
+                }
+            }
+            ui.colored_label(crate::theme::current().warn, format!("● Recording {:.0}:{:02.0}  ·  {frames} ticks  ·  marked: {name}", (secs / 60.0).floor(), secs % 60.0));
+        });
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+    } else {
+        ui.horizontal(|ui| {
+            if ui.button("Start recording").clicked() {
+                let (iso, _) = paths::timestamp();
+                app.e.start_recording(&iso);
+                app.diag.last_recording = None;
+            }
+            ui.weak("Do it with Link on, then again with Link off for the same track.");
+        });
+    }
+    match &app.diag.last_recording {
+        Some(Ok(p)) => {
+            ui.colored_label(crate::theme::current().ok, format!("Saved {}  — attach this file", p.display()));
+        }
+        Some(Err(e)) => {
+            ui.colored_label(crate::theme::current().err, e);
+        }
+        None => {}
+    }
+}
+
+fn save_recording(rec: &lumen_core::recording::Recording) -> Result<PathBuf, String> {
+    let (_, stamp) = paths::timestamp();
+    let path = paths::reports_dir().join(format!("kickline-recording-{stamp}.json"));
+    let json = rec.to_json()?;
+    std::fs::write(&path, json).map_err(|e| format!("{}: {e}", path.display()))?;
+    log::info("recording", format!("saved {}", path.display()));
+    Ok(path)
 }

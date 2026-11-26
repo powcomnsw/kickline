@@ -9,6 +9,7 @@ pub mod effect;
 pub mod frame;
 pub mod generator;
 pub mod palette;
+pub mod recording;
 pub mod director;
 pub mod scenes;
 pub mod sections;

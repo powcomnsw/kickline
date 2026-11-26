@@ -34,8 +34,7 @@ jobs:
       - name: Timer accuracy on this runner
         run: cargo test -p lumen-app --locked timer_accuracy -- --ignored --nocapture
       - name: Test
-        # Keep building the app even if a test fails, so there's always a .dmg to try.
-        continue-on-error: true
+        # A failing test stops the release: nothing broken gets published.
         run: cargo test --workspace --locked
       - name: Build app and disk image
         env:
