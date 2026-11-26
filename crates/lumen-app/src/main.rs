@@ -92,6 +92,9 @@ pub struct LumenApp {
     pub audio_status: String,
     pub diag: diagnostics::State,
     export_after: Option<f64>,
+    /// Audio source from last time, reopened once it is available.
+    restore_audio: Option<String>,
+    restore_tick: u32,
     export_probe_started: bool,
     pub windows: Windows,
     pub ao: advanced_output::State,
@@ -153,6 +156,8 @@ impl LumenApp {
             audio_status: "No audio source".into(),
             diag: diagnostics::State::new(gpu),
             export_after: None,
+            restore_audio: audio_panel::saved(),
+            restore_tick: 0,
             export_probe_started: false,
             windows: Windows {
                 advanced_output: false,
@@ -604,6 +609,23 @@ impl eframe::App for LumenApp {
             s: self,
         };
         diagnostics::poll(&mut v);
+        // Reopen last time's audio source (the app may still be starting, so
+        // keep trying every couple of seconds for a few minutes).
+        if v.restore_audio.is_some() {
+            if !matches!(v.e.audio, AudioSource::Off) {
+                v.restore_audio = None;
+            } else if v.restore_tick % 120 == 0 {
+                if let Some(what) = v.restore_audio.clone() {
+                    if audio_panel::restore(&mut v, &what) {
+                        v.restore_audio = None;
+                    }
+                }
+            }
+            v.restore_tick += 1;
+            if v.restore_tick > 120 * 150 {
+                v.restore_audio = None;
+            }
+        }
         project::tick(&mut v, &ctx);
         if let Some(at) = v.export_after {
             let up = log::uptime();

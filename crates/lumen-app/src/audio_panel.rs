@@ -59,15 +59,77 @@ fn refresh_sources(app: &mut View) {
     app.audio_apps = lumen_audio::mac_tap::list_audio_apps();
 }
 
+fn source_file() -> std::path::PathBuf {
+    crate::paths::data_dir().join("audio_source.txt")
+}
+
+/// Remember the source for next launch: "off", "demo", "app:<bundle id>" or "device:<id>".
+fn remember(what: &str) {
+    let _ = std::fs::write(source_file(), what);
+}
+
+/// The source used last time, if any.
+pub fn saved() -> Option<String> {
+    let s = std::fs::read_to_string(source_file()).ok()?;
+    let s = s.trim().to_string();
+    (!s.is_empty() && s != "off").then_some(s)
+}
+
+/// Reopen the source from last time. Returns true when finished (opened, or
+/// not worth trying again); false when the app isn't running yet.
+pub fn restore(app: &mut View, what: &str) -> bool {
+    refresh_sources(app);
+    if what == "demo" {
+        app.start_demo_audio();
+        return true;
+    }
+    if let Some(bundle) = what.strip_prefix("app:") {
+        let b = bundle.to_ascii_lowercase();
+        let found = app.audio_apps.iter().position(|a| a.bundle_id.to_ascii_lowercase() == b).or_else(|| {
+            if b.contains("rekordbox") {
+                lumen_audio::mac_tap::find_rekordbox(&app.audio_apps)
+                    .and_then(|r| app.audio_apps.iter().position(|a| a.pid == r.pid))
+            } else {
+                None
+            }
+        });
+        return match found {
+            Some(i) => {
+                start(app, Pick::App(i));
+                true
+            }
+            None => false,
+        };
+    }
+    if let Some(id) = what.strip_prefix("device:") {
+        if let Some(i) = app.audio_devices.iter().position(|d| d.id == id) {
+            start(app, Pick::Device(i));
+        } else {
+            app.audio_status = "Last audio device isn't connected".into();
+        }
+        return true;
+    }
+    true
+}
+
 fn start(app: &mut View, pick: Pick) {
     match pick {
-        Pick::Off => app.stop_audio(),
-        Pick::Demo => app.start_demo_audio(),
+        Pick::Off => {
+            app.stop_audio();
+            remember("off");
+        }
+        Pick::Demo => {
+            app.start_demo_audio();
+            remember("demo");
+        }
         Pick::App(i) => {
             let info = app.audio_apps[i].clone();
             app.audio_input = None; // stop the old stream first
             match lumen_audio::mac_tap::start_app_capture(&info, Some(app.wake())) {
-                Ok(input) => app.use_input(input),
+                Ok(input) => {
+                    app.use_input(input);
+                    remember(&format!("app:{}", info.bundle_id));
+                }
                 Err(e) => {
                     app.audio_status = format!("Couldn't capture {}: {e}", info.name);
                     crate::log::error("audio", app.audio_status.clone());
@@ -78,7 +140,10 @@ fn start(app: &mut View, pick: Pick) {
             let d = app.audio_devices[i].clone();
             app.audio_input = None;
             match AudioInput::start(Some(&d.id), Some(app.wake())) {
-                Ok(input) => app.use_input(input),
+                Ok(input) => {
+                    app.use_input(input);
+                    remember(&format!("device:{}", d.id));
+                }
                 Err(e) => {
                     app.audio_status = format!("Couldn't open device: {e}");
                     crate::log::error("audio", format!("couldn't open {}: {e}", d.label()));
