@@ -16,7 +16,7 @@ use crate::composition::{Clip, Layer};
 use crate::blend::BlendMode;
 use crate::palette::{Paint, Palettes};
 use crate::scenes::{self, Role, Scene};
-use crate::sections::{Section, SectionTuning};
+use crate::sections::{GenreProfile, Section};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,12 +54,34 @@ impl Genre {
         }
     }
 
-    /// What counts as "kick running" for this genre.
-    pub fn tuning(self) -> SectionTuning {
+    /// How sections are judged for this genre: bar length, half-time feel,
+    /// kick counts, settle time and build/drop thresholds. House is the
+    /// original behaviour.
+    pub fn profile(self) -> GenreProfile {
+        let base = GenreProfile::default();
         match self {
-            Genre::DrumAndBass | Genre::HipHop => SectionTuning { groove_kicks: 2, melodic_kicks: 0, settle_beats: 4 },
-            _ => SectionTuning::default(),
+            Genre::House => base,
+            Genre::Techno => GenreProfile { settle_beats: 4, drop_bass: 0.75, ..base },
+            Genre::Edm => GenreProfile { build_rise: 1.15, ..base },
+            // Long builds and breakdowns: wait two bars before believing a change.
+            Genre::Trance => GenreProfile { settle_beats: 8, ..base },
+            // Two kicks a bar, snares on 2 and 4.
+            Genre::DrumAndBass => GenreProfile { groove_kicks: 2, melodic_kicks: 0, ..base },
+            // Felt at half the tempo: one snare a bar of eight beats, sparse kicks.
+            Genre::HipHop => GenreProfile {
+                half_time: true,
+                groove_kicks: 3,
+                melodic_kicks: 1,
+                settle_beats: 8,
+                snare_roll: 12,
+                ..base
+            },
         }
+    }
+
+    /// The old name for `profile()`.
+    pub fn tuning(self) -> GenreProfile {
+        self.profile()
     }
 
     /// Multiplies how long effects stay (1 = the "change every" setting).
@@ -351,7 +373,8 @@ impl Director {
         }
 
         let dbeat = if beat >= self.last_beat { (beat - self.last_beat).min(1.0) } else { 0.0 };
-        let bar_crossed = beat >= self.last_beat && (self.last_beat / 4.0).floor() != (beat / 4.0).floor();
+        let bar = s.genre.profile().bar_beats() as f64;
+        let bar_crossed = beat >= self.last_beat && (self.last_beat / bar).floor() != (beat / bar).floor();
         self.last_beat = beat;
 
         // Energy: the section's character, nudged by how loud it is now.

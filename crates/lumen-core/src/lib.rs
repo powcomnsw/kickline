@@ -23,5 +23,5 @@ pub use generator::Generator;
 pub use palette::{Paint, Palette, Palettes};
 pub use strip::{StripClip, StripEffect, StripPixel};
 pub use composition::{StripPass, StripStage};
-pub use sections::{LayerLook, Looks, Section, SectionDetector, SectionTuning};
+pub use sections::{GenreProfile, LayerLook, Looks, Section, SectionDetector, SectionTuning};
 pub use director::{Director, DirectorSettings, Genre};

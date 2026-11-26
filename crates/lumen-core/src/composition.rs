@@ -234,11 +234,12 @@ impl Composition {
         let spb = 60.0 / self.bpm.max(1.0);
         let beat = self.beat.max(0.0);
         let since_beat = beat.fract() * spb;
-        let since_bar = (beat / 4.0).fract() * 4.0 * spb;
+        let bar = self.sections.profile.beats_per_bar.clamp(2, 12) as f64;
+        let since_bar = (beat / bar).fract() * bar * spb;
         a.set(AudioBand::Beat, (-(since_beat / 0.15)).exp() as f32);
         a.set(AudioBand::Bar, (-(since_bar / 0.25)).exp() as f32);
         a.hits[3] = beat.floor() as u64;
-        a.hits[4] = (beat / 4.0).floor() as u64;
+        a.hits[4] = (beat / bar).floor() as u64;
     }
 
     /// Feed in the latest audio analysis. Handles "advance on hit" layers.
@@ -246,7 +247,7 @@ impl Composition {
         self.clock_pulses(&mut audio);
         self.audio = audio;
         self.palettes.update(&audio, self.beat);
-        self.sections.tuning = self.director.genre.tuning();
+        self.sections.set_profile(self.director.genre.profile());
         if let Some(s) = self.sections.update(&audio, self.beat) {
             if self.looks.auto {
                 self.apply_look(s);
