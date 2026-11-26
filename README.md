@@ -71,6 +71,16 @@ rig.
 </tr>
 <tr>
 <td valign="top">
+<h3>Auto mode: a lighting director</h3>
+<p>Press <b>AUTO</b> (or <b>A</b>) and Kickline runs a wash, motion for each group and accents on the drums by itself: calm in a breakdown, rising through a build-up, everything on the drop. Tell it the style of music (house, techno, EDM, trance, drum &amp; bass, hip-hop), choose which effects and colours it may use, and it changes on the bar and crossfades. It steps back while you play your own layers, and <b>HOLD</b> (<b>H</b>) freezes the look.</p>
+</td>
+<td valign="top">
+<h3>See the music</h3>
+<p>A waveform strip across the top of Play shows the last 16 bars (bass in blue, mids in orange, highs in white) with the beat and bar lines and the song section underneath, next to big tempo and section readouts you can read from across the booth. <b>TAP</b> sets the tempo when you are not on Link.</p>
+</td>
+</tr>
+<tr>
+<td valign="top">
 <h3>1,781 fixtures built in</h3>
 <p>The full QLC+ fixture library, searchable, with every channel explained. Missing one? Drop a <code>.qxf</code> from the Open Fixture Library onto the window.</p>
 </td>
@@ -89,6 +99,8 @@ rig.
 | **Play**: layers aimed at groups, what the lights get, the song section and the song so far | **Effect browser**: live tiles by kind, colour picked on its own |
 | ![Layer settings](docs/screenshots/layer-settings.png) | ![Stage](docs/screenshots/stage.png) |
 | **Layer settings**: which group it lights, and its clip in each part of the song | **Set up → Stage**: groups, looks per section, stage profiles |
+| ![Auto mode](docs/screenshots/auto-play.png) | ![Auto settings](docs/screenshots/auto-settings.png) |
+| **Auto mode**: the waveform strip, section and what Auto is showing | **Set up → Auto**: style of music, mood, and what Auto may use |
 | ![Controller](docs/screenshots/controller.png) | ![Song sections](docs/screenshots/music-sections.png) |
 | **Add a controller**: an H807SA with LEDs per output, addressed for you | **Set up → Music**: the sections Kickline heard in the demo track |
 

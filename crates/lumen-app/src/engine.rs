@@ -104,6 +104,7 @@ pub struct Engine {
     /// The colour each fixture's pixels were sent, in wiring order (for the
     /// preview: exactly what the lights get).
     pub lights: Vec<Vec<[u8; 3]>>,
+    ticks: u32,
 }
 
 impl Engine {
@@ -138,6 +139,7 @@ impl Engine {
             last_sent: Default::default(),
             blackout: false,
             lights: Vec::new(),
+            ticks: 0,
         }
     }
 
@@ -191,6 +193,14 @@ impl Engine {
             self.comp.tick(dt);
         }
 
+        // Auto mode gives each group its own motion: tell it the groups now and then.
+        self.ticks = self.ticks.wrapping_add(1);
+        if self.comp.director.on && self.ticks % 20 == 1 {
+            let groups = self.output.group_names();
+            if self.comp.auto_groups != groups {
+                self.comp.auto_groups = groups;
+            }
+        }
         self.update_audio(dt);
         let t = Instant::now();
         self.frame = self.comp.render();
@@ -764,6 +774,33 @@ mod tests {
         } else {
             false
         }
+    }
+
+    /// Auto mode inside the real engine: it finds the show's groups, gives
+    /// each its own motion, and the lights really get lit by it.
+    #[test]
+    fn auto_mode_drives_the_lights_per_group() {
+        let mut out = AdvancedOutput::demo();
+        for (i, f) in out.fixtures.iter_mut().enumerate() {
+            f.groups = vec![if i % 2 == 0 { "Even".to_string() } else { "Odd".to_string() }];
+        }
+        let mut comp = Composition::new(32, 16, 6);
+        comp.director.on = true;
+        let mut e = Engine::new(comp, out);
+        e.start_demo_audio();
+        for _ in 0..600 {
+            std::thread::sleep(Duration::from_millis(2));
+            e.tick(false);
+        }
+        assert_eq!(e.comp.auto_groups, vec!["Even".to_string(), "Odd".to_string()]);
+        let names: Vec<String> = e.comp.auto.iter().filter_map(|l| l.target.clone()).collect();
+        assert!(names.iter().any(|n| n == "Even") && names.iter().any(|n| n == "Odd"), "{names:?}");
+        let lit = e.lights.iter().flatten().any(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 10);
+        assert!(lit, "Auto lit nothing");
+        // Switched off, its layers go away.
+        e.comp.director.on = false;
+        e.tick(false);
+        assert!(e.comp.auto.is_empty());
     }
 
     #[test]

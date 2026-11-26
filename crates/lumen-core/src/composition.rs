@@ -1,3 +1,4 @@
+use crate::director::{Director, DirectorSettings, Input as DirectorInput};
 use crate::sections::{LayerLook, Looks, Section, SectionDetector};
 use crate::audio::{AudioBand, AudioBands, AudioLink};
 use crate::blend::{composite, BlendMode};
@@ -93,9 +94,21 @@ pub struct Composition {
     /// A look for each song section, switched automatically if `looks.auto`.
     #[serde(default)]
     pub looks: Looks,
+    /// Auto mode's settings.
+    #[serde(default)]
+    pub director: DirectorSettings,
     /// Listens for song sections.
     #[serde(skip)]
     pub sections: SectionDetector,
+    /// Auto mode's own layers (pairs, for crossfades). Under the user's layers.
+    #[serde(skip)]
+    pub auto: Vec<Layer>,
+    /// What Auto is doing right now.
+    #[serde(skip)]
+    pub director_rt: Director,
+    /// Groups in the show, for Auto's per-group motion (set by the engine).
+    #[serde(skip)]
+    pub auto_groups: Vec<String>,
     /// Brightness from the current section's look (1 when looks are off).
     #[serde(skip, default = "one")]
     pub look_level: f32,
@@ -116,7 +129,11 @@ impl Composition {
             bpm: 120.0,
             palettes: Palettes::default(),
             looks: Looks::default(),
+            director: DirectorSettings::default(),
             sections: SectionDetector::default(),
+            auto: Vec::new(),
+            director_rt: Director::default(),
+            auto_groups: Vec::new(),
             look_level: 1.0,
             beat: 0.0,
             audio: AudioBands::default(),
@@ -142,6 +159,9 @@ impl Composition {
         }
         new.palettes.keep_live(&self.palettes);
         new.sections = std::mem::take(&mut self.sections);
+        new.auto = std::mem::take(&mut self.auto);
+        new.director_rt = std::mem::take(&mut self.director_rt);
+        new.auto_groups = std::mem::take(&mut self.auto_groups);
         new.look_level = self.look_level;
         *self = new;
     }
@@ -226,11 +246,13 @@ impl Composition {
         self.clock_pulses(&mut audio);
         self.audio = audio;
         self.palettes.update(&audio, self.beat);
+        self.sections.tuning = self.director.genre.tuning();
         if let Some(s) = self.sections.update(&audio, self.beat) {
             if self.looks.auto {
                 self.apply_look(s);
             }
         }
+        self.run_director();
         if !self.looks.auto {
             self.look_level = 1.0;
         }
@@ -253,6 +275,25 @@ impl Composition {
                 self.trigger(i, next);
             }
         }
+    }
+
+    /// Layers from the top: yours, then Auto's.
+    fn stack(&self) -> impl DoubleEndedIterator<Item = &Layer> + '_ {
+        self.layers.iter().chain(self.auto.iter())
+    }
+
+    /// One frame of Auto mode.
+    fn run_director(&mut self) {
+        let user_playing = self.layers.iter().any(|l| !l.bypass && l.active.is_some() && l.opacity > 0.0);
+        let input = DirectorInput {
+            audio: &self.audio,
+            beat: self.beat,
+            section: self.sections.current(),
+            beats_in: self.sections.beats_in,
+            groups: &self.auto_groups,
+            user_playing,
+        };
+        self.director_rt.step(&self.director, &input, &mut self.auto, &mut self.palettes);
     }
 
     /// Switch to a section's look: each layer's clip, the palette, brightness.
@@ -304,7 +345,7 @@ impl Composition {
     /// Groups that active layers are aimed at (each once).
     pub fn targeted_groups(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        for l in &self.layers {
+        for l in self.stack() {
             if l.bypass || l.active.is_none() {
                 continue;
             }
@@ -321,7 +362,7 @@ impl Composition {
     pub fn strip_stage(&self) -> StripStage {
         let palette = self.palettes.current(self.beat);
         let mut passes = Vec::new();
-        for layer in self.layers.iter().rev() {
+        for layer in self.stack().rev() {
             if layer.bypass {
                 continue;
             }
@@ -359,7 +400,7 @@ impl Composition {
         let mut out = Frame::black(self.width, self.height);
         let mut scratch = Frame::transparent(self.width, self.height);
         let palette = self.palettes.current(self.beat);
-        for layer in self.layers.iter().rev() {
+        for layer in self.stack().rev() {
             if layer.bypass {
                 continue;
             }
@@ -688,5 +729,46 @@ mod tests {
         assert_eq!(back.layers[3].clips[0].as_ref().unwrap().name, "Rainbow");
         assert_eq!(back.layers[2].advance_on, Some(AudioBand::Snare));
         assert!(back.layers[0].clips[0].as_ref().unwrap().generator.is_strip());
+    }
+
+    #[test]
+    fn auto_mode_lights_an_empty_show_and_is_not_saved() {
+        let mut c = Composition::new(16, 8, 6);
+        c.director.on = true;
+        let mut a = AudioBands::default();
+        a.set(AudioBand::Level, 0.8);
+        for _ in 0..400 {
+            c.tick(1.0 / 44.0);
+            c.set_audio(a);
+        }
+        assert!(!c.auto.is_empty());
+        let lit = c.render().pixels.iter().any(|p| p.r + p.g + p.b > 0.05);
+        assert!(lit, "Auto produced nothing");
+        // The layers Auto runs are not part of the show file.
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(!json.contains("Auto Wash"), "auto layers leaked into the save");
+        assert!(json.contains("\"director\""));
+        // A show saved before Auto existed still opens, with Auto off.
+        let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        v.as_object_mut().unwrap().remove("director");
+        let back: Composition = serde_json::from_value(v).unwrap();
+        assert!(!back.director.on);
+    }
+
+    #[test]
+    fn replace_show_keeps_auto_running() {
+        let mut c = Composition::new(16, 8, 6);
+        c.director.on = true;
+        let mut a = AudioBands::default();
+        a.set(AudioBand::Level, 0.8);
+        for _ in 0..100 {
+            c.tick(1.0 / 44.0);
+            c.set_audio(a);
+        }
+        let n = c.auto.len();
+        let mut edited = c.clone();
+        edited.master = 0.5;
+        c.replace_show(edited);
+        assert_eq!(c.auto.len(), n, "undo/redo must not restart Auto");
     }
 }

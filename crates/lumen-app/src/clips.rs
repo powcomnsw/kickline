@@ -244,44 +244,11 @@ impl Default for State {
 
 /// Effects by kind, for the browser. Colours are set separately.
 pub fn catalog() -> Vec<(&'static str, &'static str, Vec<Generator>)> {
-    let c = Paint::Slot(0);
-    let mut strips = Vec::new();
-    for (_, sc) in StripClip::presets() {
-        strips.push(Generator::Strip(sc));
-    }
-    vec![
-        ("Movement", "Shapes that travel across the lights", vec![
-            Generator::LeftRight { color: c, beats: 4.0, width: 0.2 },
-            Generator::Scanner { color: c, beats: 4.0, width: 0.2 },
-            Generator::Sweep { color: c, beats: 2.0, width: 0.15, inward: true },
-            Generator::Sweep { color: c, beats: 2.0, width: 0.15, inward: false },
-            Generator::Wipe { color: c, beats: 4.0 },
-            Generator::Radar { color: c, beats_per_turn: 4.0, tail: 0.3 },
-            Generator::Chase { color: c, width: 0.25, beats_per_cycle: 2.0 },
-        ]),
-        ("On the beat", "Flashes timed to the beat or the drums", vec![
-            Generator::BeatPulse { color: c, per_beat: 1.0, fade: 0.6 },
-            Generator::AudioFlash { band: AudioBand::Kick, color: c },
-            Generator::Strobe { color: c, per_beat: 2.0, duty: 0.3 },
-            Generator::Twinkle { color: c, density: 0.4, per_beat: 2.0 },
-            Generator::Bands,
-        ]),
-        ("Along strips", "Run along every strip, whatever angle it's at", strips),
-        ("Washes", "Fill everything with colour", vec![
-            Generator::Solid { color: c },
-            Generator::PaletteWash { beats_per_cycle: 16.0 },
-            Generator::Rainbow { scale: 1.0, beats_per_cycle: 8.0 },
-            Generator::Plasma { scale: 1.0, speed: 1.0 },
-        ]),
-    ]
+    lumen_core::scenes::catalog()
 }
 
 fn generator_name(g: &Generator) -> String {
-    match g {
-        Generator::Strip(sc) => StripClip::presets().into_iter().find(|(_, p)| p == sc).map(|(n, _)| n.to_string()).unwrap_or_else(|| g.kind_name().to_string()),
-        Generator::AudioFlash { band, .. } => format!("{} flash", band.name()),
-        _ => g.kind_name().to_string(),
-    }
+    lumen_core::scenes::name(g)
 }
 
 /// The Play screen's centre: palette row, then the layers and their clips.

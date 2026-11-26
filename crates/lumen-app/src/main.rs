@@ -1,4 +1,5 @@
 mod advanced_output;
+mod auto;
 mod audio_panel;
 mod clips;
 mod diagnostics;
@@ -13,6 +14,7 @@ mod project;
 mod stage;
 mod theme;
 mod util;
+mod wave;
 
 use eframe::egui::{self, Color32, Sense, Vec2};
 use engine::{AudioSource, Engine};
@@ -34,19 +36,21 @@ pub enum Page {
     Output,
     Stage,
     Library,
+    Auto,
     Music,
     Dmx,
     Diagnostics,
 }
 
 impl Page {
-    const ALL: [Page; 6] = [Page::Output, Page::Stage, Page::Library, Page::Music, Page::Dmx, Page::Diagnostics];
+    const ALL: [Page; 7] = [Page::Output, Page::Stage, Page::Auto, Page::Library, Page::Music, Page::Dmx, Page::Diagnostics];
 
     fn name(self) -> &'static str {
         match self {
             Page::Output => "Output",
             Page::Stage => "Stage",
             Page::Library => "Fixture library",
+            Page::Auto => "Auto mode",
             Page::Music => "Music",
             Page::Dmx => "DMX values",
             Page::Diagnostics => "Diagnostics",
@@ -58,6 +62,7 @@ impl Page {
             Page::Output => "Controllers, universes and where each fixture sits",
             Page::Stage => "Groups, looks for each part of a song, stage profiles",
             Page::Library => "Fixture types: search thousands, or make your own",
+            Page::Auto => "Style of music, mood, and which effects and colours Auto may use",
             Page::Music => "Audio input and drum detection",
             Page::Dmx => "Every channel being sent, live",
             Page::Diagnostics => "Network checks, log and reports",
@@ -101,6 +106,10 @@ pub struct LumenApp {
     pub page: Page,
     pub play: clips::State,
     pub stage: stage::State,
+    /// Recent taps of the TAP button.
+    taps: Vec<std::time::Instant>,
+    /// The last minute of music, for the strip on Play.
+    pub wave: wave::History,
 }
 
 /// What every UI function gets: the locked engine (`app.e`) plus UI state
@@ -128,6 +137,13 @@ impl LumenApp {
         let (path, show, first_run) = project::startup();
         let engine = Arc::new(Mutex::new(Engine::new(show.composition, show.output)));
         let engine_thread = Some(engine::spawn(engine.clone()));
+        // Follow rekordbox's tempo and beat by default; with nobody to follow
+        // the clock simply runs on the BPM.
+        if link::LinkSync::AVAILABLE {
+            if let Ok(mut e) = engine.lock() {
+                e.sync.link_enabled = true;
+            }
+        }
         LumenApp {
             engine,
             engine_thread,
@@ -155,6 +171,8 @@ impl LumenApp {
             page: Page::Output,
             play: Default::default(),
             stage: Default::default(),
+            taps: Vec::new(),
+            wave: Default::default(),
         }
     }
 }
@@ -207,6 +225,29 @@ impl View<'_> {
         }
     }
 
+    /// Tap tempo: the tempo from the last few taps, and the beat lined up with this one.
+    fn tap(&mut self, shift: bool) {
+        let now = std::time::Instant::now();
+        let taps = &mut self.s.taps;
+        if taps.last().is_some_and(|l| now.duration_since(*l).as_secs_f64() > 2.0) {
+            taps.clear();
+        }
+        taps.push(now);
+        if taps.len() > 8 {
+            taps.remove(0);
+        }
+        if taps.len() >= 2 {
+            let n = taps.len() - 1;
+            let span = taps[n].duration_since(taps[0]).as_secs_f64();
+            let bpm = 60.0 * n as f64 / span.max(1e-3);
+            if (20.0..=300.0).contains(&bpm) {
+                self.e.comp.bpm = (bpm * 10.0).round() / 10.0;
+            }
+        }
+        let b = self.e.comp.beat;
+        self.e.comp.beat = if shift { (b / 4.0).round() * 4.0 } else { b.round() };
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let t = theme::current();
         ui.add_space(5.0);
@@ -223,6 +264,11 @@ impl View<'_> {
             } else {
                 "This build was made without Ableton Link"
             });
+            let tap = egui::Button::new(egui::RichText::new("TAP").font(theme::bold(t.text_size - 1.0)));
+            if ui.add_enabled(!synced, tap).on_hover_text("Tap the beat to set the tempo and line the beat up. Shift-tap on the 1 to start the bar there.").clicked() {
+                let shift = ui.input(|i| i.modifiers.shift);
+                self.tap(shift);
+            }
             util::beat_dots(ui, self.e.comp.beat);
             ui.add_space(10.0);
             ui.label(egui::RichText::new("Master").color(t.weak));
@@ -283,6 +329,7 @@ impl View<'_> {
         }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.add_space(6.0);
+            card(ui, "Auto", |ui| auto::card(self, ui));
             card(ui, "What the lights get", |ui| {
                 let w = ui.available_width();
                 stage::paint_lights(ui, self, Vec2::new(w, w), &|_| None);
@@ -390,6 +437,7 @@ impl View<'_> {
         match self.s.page {
             Page::Output => advanced_output::ui(self, ui),
             Page::Stage => stage::ui(self, ui),
+            Page::Auto => auto::page(self, ui),
             Page::Library => fixture_editor::ui(self, ui),
             Page::Music => {
                 stage::music_sections(self, ui);
@@ -583,12 +631,21 @@ impl eframe::App for LumenApp {
             if ctx.input(|i| i.key_pressed(egui::Key::B) && !i.modifiers.command) {
                 v.e.blackout = !v.e.blackout;
             }
+            if ctx.input(|i| i.key_pressed(egui::Key::A) && !i.modifiers.command) {
+                auto::toggle_auto(&mut v);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::H) && !i.modifiers.command) {
+                v.e.comp.director_rt.hold = !v.e.comp.director_rt.hold;
+            }
         }
         egui::Panel::top("top").show(ui, |ui| v.top_bar(ui));
         match v.mode {
             Mode::Play => {
                 egui::Panel::right("play_side").exact_size(340.0).resizable(false).show(ui, |ui| v.play_side(ui));
-                egui::CentralPanel::default().show(ui, |ui| clips::ui(&mut v, ui));
+                egui::CentralPanel::default().show(ui, |ui| {
+                    wave::strip(&mut v, ui);
+                    clips::ui(&mut v, ui)
+                });
             }
             Mode::Setup => {
                 egui::Panel::left("nav").exact_size(200.0).resizable(false).show(ui, |ui| {
@@ -786,7 +843,8 @@ fn apply_args(app: &mut LumenApp, args: &[String]) {
         } else if let Some(p) = arg.strip_prefix("--page=") {
             v.s.mode = Mode::Setup;
             v.s.page = match p {
-                "stage" => Page::Stage,
+"stage" => Page::Stage,
+                "auto" => Page::Auto,
                 "library" => Page::Library,
                 "music" => Page::Music,
                 "dmx" => Page::Dmx,
@@ -811,6 +869,8 @@ fn apply_args(app: &mut LumenApp, args: &[String]) {
             let mut cs = lumen_fixtures::ControllerSetup::new(0, 0);
             cs.leds = vec![512, 512, 512, 180, 120, 0, 0, 0];
             v.s.ao.controller = Some(cs);
+        } else if arg == "--auto" {
+            v.e.comp.director.on = true;
         } else if arg == "--blackout" {
             v.e.blackout = true;
         } else if arg == "--test-crash" {

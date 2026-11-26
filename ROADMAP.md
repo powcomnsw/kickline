@@ -103,6 +103,20 @@ Key decisions:
 - [x] Stage profiles: rig + groups + colours + looks in one file; an example DJ stage (2 panels, matrix, triangle, square)
 - [ ] Sections from rekordbox's own analysis (needs Pro DJ Link from CDJs; rekordbox doesn't share it with other apps)
 
+## Auto mode (v0.12, done)
+
+- [x] Auto mode: Kickline picks effects, colours and changes by itself from the song section and energy; crossfades on the bar; your own layers always sit on top (Auto steps back while one plays); Hold freezes the look; keys A and H
+- [x] Style of music: house, techno, EDM, trance, drum & bass, hip-hop (drum & bass and hip-hop count two kicks a bar as a groove), with pace and energy to match
+- [x] Choose what Auto may use: effects (each tagged with its role, energy and song parts), palettes, groups; flash-safe by default
+- [x] Per-group motion: each group gets its own effect
+- [x] Section confidence ("sure 80%") next to the section name
+- [x] Tap tempo (shift-tap on the 1 starts the bar); Link is on by default and the clock runs on the BPM when nobody is in the session
+- [x] Waveform strip on Play (bass, mids, highs, beat and bar lines, song sections) with big BPM and section readouts
+- [ ] Tempo and downbeat estimated from the audio (for sets without Link)
+- [ ] Per-effect weights and per-group rules in Auto
+- [ ] Genre suggested from tempo and kick pattern
+- [ ] MIDI input with learn mode, so a pad can hold, release or switch Auto
+
 ## Known limitations of v0.6
 - Imported moving heads light up but don't move yet: pan/tilt are held centred.
 - Drum detection is tuned for four-on-the-floor dance music; use the Tuning sliders for other styles.

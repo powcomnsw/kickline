@@ -91,6 +91,27 @@ pub struct Reading {
     pub level: f32,
     /// How much the highs rose over the last two bars (1 = no change).
     pub rise: f32,
+    /// How sure Kickline is of the current section (0..1): low right after a
+    /// change or while a different section is being weighed up.
+    pub confidence: f32,
+}
+
+/// What counts as "kick running" in a genre. Four-on-the-floor music has 4
+/// kicks a bar; drum & bass and hip-hop have 2.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SectionTuning {
+    /// Kicks in the last bar for the track to count as in its groove.
+    pub groove_kicks: u32,
+    /// At most this many kicks in the last bar counts as "no kick" (melodic).
+    pub melodic_kicks: u32,
+    /// Beats a new section has to hold before Kickline believes it.
+    pub settle_beats: u32,
+}
+
+impl Default for SectionTuning {
+    fn default() -> Self {
+        SectionTuning { groove_kicks: 3, melodic_kicks: 1, settle_beats: 4 }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -107,6 +128,7 @@ pub struct SectionDetector {
     /// Beats since the section started.
     pub beats_in: u32,
     pub reading: Reading,
+    pub tuning: SectionTuning,
     /// Sections heard so far, oldest first, with their length in beats.
     pub past: VecDeque<(Section, u32)>,
 }
@@ -125,13 +147,11 @@ impl Default for SectionDetector {
             ref_level: 0.0,
             beats_in: 0,
             reading: Reading::default(),
+            tuning: SectionTuning::default(),
             past: VecDeque::new(),
         }
     }
 }
-
-/// Beats a new section has to hold before Kickline believes it.
-const SETTLE_BEATS: u32 = 4;
 
 impl SectionDetector {
     pub fn current(&self) -> Section {
@@ -177,7 +197,11 @@ impl SectionDetector {
         self.ref_low = (self.ref_low * 0.996).max(sample.low);
         self.ref_level = (self.ref_level * 0.996).max(sample.level);
         let guess = self.classify();
-        self.decide(guess)
+        let changed = self.decide(guess);
+        let pending = if self.candidate.is_some() { 0.6 } else { 1.0 };
+        let settled = (self.beats_in as f32 / self.tuning.settle_beats.max(1) as f32).min(1.0);
+        self.reading.confidence = (0.25 + 0.75 * settled) * pending;
+        changed
     }
 
     fn classify(&mut self) -> Section {
@@ -201,7 +225,7 @@ impl SectionDetector {
         let rise = if high_before > 1e-6 { high_now / high_before } else { 1.0 };
         // Snare density rising (a roll speeding up).
         let snares_before: u32 = h.iter().skip(n.saturating_sub(8)).take(4.min(n.saturating_sub(4))).map(|b| b.snares).sum();
-        self.reading = Reading { kicks, snares, bass, level, rise };
+        self.reading = Reading { kicks, snares, bass, level, rise, confidence: 0.0 };
 
         let prev_level = if n >= 2 { h[n - 2].level / self.ref_level.max(1e-6) } else { 0.0 };
         // A sudden drop to near-silence (a release tail can keep it above zero).
@@ -222,10 +246,10 @@ impl SectionDetector {
         if building {
             return Section::BuildUp;
         }
-        if kicks >= 3 {
+        if kicks >= self.tuning.groove_kicks {
             return if bass >= 0.72 && level >= 0.6 { Section::Drop } else { Section::Groove };
         }
-        if kicks <= 1 {
+        if kicks <= self.tuning.melodic_kicks {
             return Section::Melodic;
         }
         self.current
@@ -244,7 +268,7 @@ impl SectionDetector {
             Some((s, k)) if s == guess => k + 1,
             _ => 1,
         };
-        if instant || held >= SETTLE_BEATS {
+        if instant || held >= self.tuning.settle_beats.max(1) {
             self.past.push_back((self.current, self.beats_in));
             while self.past.len() > 24 {
                 self.past.pop_front();
@@ -380,5 +404,37 @@ mod tests {
         play(&mut d, &mut a, &mut beat, 16, |a, _| beat_bands(1, 0, 1.0, 0.5, 1.0)(a));
         play(&mut d, &mut a, &mut beat, 2, |a, _| beat_bands(0, 0, 0.0, 0.0, 0.0)(a));
         assert_eq!(d.current(), Section::Pause);
+    }
+
+    #[test]
+    fn drum_and_bass_has_two_kicks_a_bar() {
+        let tuned = SectionTuning { groove_kicks: 2, melodic_kicks: 0, settle_beats: 4 };
+        let run = |tuning: SectionTuning| {
+            let mut d = SectionDetector { tuning, ..Default::default() };
+            let mut a = AudioBands::default();
+            let mut beat = 0.0;
+            // Kick on 1 and 3 only. A loud part, a breakdown, then the groove.
+            play(&mut d, &mut a, &mut beat, 32, |a, b| beat_bands((b % 2 == 0) as u32, (b % 2 == 1) as u32, 1.0, 0.5, 1.0)(a));
+            play(&mut d, &mut a, &mut beat, 32, |a, _| beat_bands(0, 0, 0.12, 0.25, 0.4)(a));
+            let breakdown = d.current();
+            play(&mut d, &mut a, &mut beat, 32, |a, b| beat_bands((b % 2 == 0) as u32, (b % 2 == 1) as u32, 0.5, 0.35, 0.65)(a));
+            (breakdown, d.current())
+        };
+        // With the genre's own counts the kicks bring the groove back.
+        assert_eq!(run(tuned), (Section::Melodic, Section::Groove));
+        // With four-on-the-floor counts two kicks a bar never counts as a groove.
+        assert_ne!(run(SectionTuning::default()).1, Section::Groove);
+    }
+
+    #[test]
+    fn confidence_grows_while_a_section_holds() {
+        let mut d = SectionDetector::default();
+        let mut a = AudioBands::default();
+        let mut beat = 0.0;
+        play(&mut d, &mut a, &mut beat, 24, |a, _| beat_bands(1, 0, 1.0, 0.5, 1.0)(a));
+        assert!(d.reading.confidence > 0.9, "{:?}", d.reading);
+        // Just after a change it is low.
+        play(&mut d, &mut a, &mut beat, 2, |a, _| beat_bands(0, 0, 0.0, 0.0, 0.0)(a));
+        assert!(d.reading.confidence < 0.6, "{:?}", d.reading);
     }
 }
