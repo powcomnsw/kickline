@@ -122,3 +122,9 @@ Key decisions:
 - Drum detection is tuned for four-on-the-floor dance music; use the Tuning sliders for other styles.
 - Loopback capture is built in on Windows only; macOS needs BlackHole/Loopback.
 - Resolume's FFGL/ISF plugins, video codecs (DXV) and NDI are out of scope for v0.1.
+
+## Auto VJ (planned)
+
+The plan for running a whole set by itself (tempo from the audio, a playbook
+of looks per section, stage roles, Show mode) is in
+[docs/design/auto-vj.md](docs/design/auto-vj.md). Nothing in it is built yet.
