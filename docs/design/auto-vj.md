@@ -1,6 +1,7 @@
 # Auto VJ: Kickline runs the whole set by itself
 
-Status: **design, waiting for approval** (27 Nov 2026). Nothing here is built yet.
+Status: **plan only** (27 Nov 2026). Nothing here is built yet, and nothing
+should be built until the user says to start.
 
 This document is written for the model (or person) who will build it. It
 says what is wanted and why, what was decided, and what is left to you.
@@ -34,15 +35,19 @@ would, without touching it:
    handful of effects that really suit it. Ten distinct looks per section
    cannot be made by reordering what exists.
 3. **Sections are misread with Ableton Link on.** Reported from real use;
-   cause not yet confirmed. The leading suspect: with Link on and a peer
+   cause **not known**. What the code does: with Link on and a peer
    present, `Engine::tick` calls `comp.set_clock(link_beat, link_tempo)`,
    and `SectionDetector::update` cuts the audio into beats at
-   `beat.floor()` of that clock. Link carries the session tempo, not the
-   position of the kicks in the track that is playing. If a deck is not
-   Link-synced, or the pitch is moved, Link's beats slide off the real
-   kicks. Two more things shift the cut: the "fire early" lookahead is
-   added to the same beat the detector uses, and captured audio arrives
-   later than Link's clock. Reproduce before fixing (Phase 0).
+   `beat.floor()` of that clock. So the detector trusts Link completely
+   for where each beat starts. The user plays with LINK on for every
+   deck, so a free-running deck is probably not the cause. Things to
+   check against a recording, in this order: Link's beat jumping or
+   restarting when a deck is loaded or a peer joins; the "fire early"
+   lookahead and the capture delay shifting kicks into the wrong beat;
+   rekordbox beat grids that are off for some tracks; the peer count
+   dropping to zero so the clock falls back to free-running; and the
+   drum detection itself behaving differently on the real feed than on
+   the demo beat. Do not fix by guessing: reproduce it first (Phase 0).
 4. **No tempo from the audio.** Without Link the clock is the typed or
    tapped BPM. There is no beat tracker.
 5. **The stage is only rectangles and names.** A group is a name; its
@@ -60,7 +65,10 @@ would, without touching it:
   ten looks of the right family, played in rotation with no immediate
   repeats.
 - G3. Looks are written for **stage roles**, so one playbook works on any
-  stage once its parts are tagged.
+  stage once its parts are tagged. The stage changes from show to show
+  and there is no "usual rig": a new stage must go from nothing to a
+  running show in about ten minutes, and switching stage must not lose
+  the user's playbook choices.
 - G4. A stage can add a few **signature looks** of its own.
 - G5. **Show mode**: open the app and it finds rekordbox, starts output
   and Auto, and recovers by itself from anything that drops out.
@@ -79,7 +87,9 @@ shape, and the user tags it.
 ## Anti-goals (a failure even if it "works")
 
 - Auto still looks random, or two drops in a row look the same.
-- Anything strobes when flash-safe is on. Flash-safe stays the default.
+- Anything strobes when flash-safe is on. (The user wants real strobes
+  in drops, so his shows run with flash-safe off. The switch stays, for
+  venues that ask for it.)
 - The user has to touch the app mid-set to keep it looking right.
 - Link becomes required, or a bad Link session can still wreck the beat.
 - A show or stage profile saved by v0.12 no longer opens.
@@ -189,7 +199,12 @@ Families (the rule the user asked for):
 | Melodic | slow and soft: breathing, slow washes, twinkle |
 | Build-up | chases and fills that speed up and tighten |
 | Pause | dark, one focal element at most |
-| Drop | flashes and bursts on the kick, the whole rig, high contrast |
+| Drop | real strobes, flashes and bursts on the kick, and effects driven by the bass; the whole rig, high contrast |
+
+The user asked for two kinds of drop: real strobes, and effects that
+move with the bass (brightness, size or reach following the bass level,
+not only a flash on each kick). Both kinds must be in the Drop list, and
+bass-driven looks belong in Groove too.
 
 Ten looks per section do not need ten new generators each. Variety comes
 from which role leads, direction, speed, mirror, stagger and colour slot.
@@ -226,8 +241,20 @@ Centre, Fill.**
   silently.
 - **Signature looks** live in the stage profile and are added to a
   section's list for that stage only.
-- The example stage gets roles, and two more example stages are added (a
-  face and a dragon) so tests and screenshots cover the idea.
+- **Changing stage.** A stage is one stage profile file. Loading another
+  profile swaps the rig, groups, roles and signature looks in one step
+  and leaves the playbook choices (looks switched off, order, Auto
+  settings) alone. Today a profile also carries palettes and looks;
+  decide what moves with the stage and what stays with the show, and
+  write it down.
+- **A new stage, start to finish:** setup guide (controller, lights,
+  test) → place fixtures → accept or correct the suggested roles → save
+  the profile → Auto runs. Count the steps and keep them few.
+- The example stage is only an example; the user's real stages differ
+  every time. It gets roles, and two more example stages are added (a
+  face and a dragon). Tests must also run the playbook over made-up
+  stages (random layouts, with and without roles) to prove every look
+  lights something on any of them.
 
 ### D. New effects
 
@@ -243,9 +270,12 @@ Expected gaps:
 - eye glow and blink for focal points
 - a single meteor or "fire" along a whole Path
 - patterns for panels and matrices (checker swap, scan line)
+- bass-driven effects: a throb whose brightness follows the bass, a
+  shape that grows from the Centre with the bass level, a bass meter
+  along a Path
 
-Every flashing effect declares its flash rate. Flash-safe allows nothing
-above 3 flashes a second.
+Every flashing effect declares its flash rate. With flash-safe on,
+nothing above 3 flashes a second plays; with it off, real strobes do.
 
 ### E. Rock solid
 
@@ -272,8 +302,9 @@ the captured audio, the Link beat, tempo and peer count per tick, and
 lets the user mark the real section with the keys 1 to 5 as it plays. Add
 the replay harness. Gate releases on tests. *Done when:* a recording made
 by the user with Link on reproduces the misread sections in a test.
-*Needs the user:* three or four recordings of a few minutes each (Link
-on with decks synced, Link on with a deck not synced, Link off).
+*Needs the user:* three or four recordings of a few minutes each: the
+same two or three tracks played once with Link on and once with Link
+off, including at least one where the lights were clearly wrong.
 
 **Phase 1: The clock.** Beat tracker, the two clocks, the clock rules,
 phrase position, set memory. *Done when:* on the recordings and on the
@@ -299,8 +330,9 @@ and a stage with no roles, checked by tests on which fixtures light.
 
 **Phase 4: Effects.** The new effects in D, then fill the playbook to
 about ten looks per section. *Done when:* each section has at least ten
-enabled looks with flash-safe on, and each look has a rendered-frame
-test.
+enabled looks with flash-safe off, the Drop list has both strobe looks
+and bass-driven looks, at least six Drop looks remain with flash-safe
+on, and each look has a rendered-frame test.
 
 **Phase 5: Solid.** Soak test, fail-soft behaviour, Show mode, the
 before-the-show check. Tidy the stale docs (README links to the old
@@ -327,14 +359,16 @@ test can start any time after Phase 0.
 - Looks are compiled in; the show stores only the user's changes.
 - Rotation is a seeded shuffled bag, not a fixed order.
 - The audio wins when Link and the audio disagree.
-- Flash-safe allows at most 3 flashes a second.
+- Flash-safe allows at most 3 flashes a second, and at least six Drop
+  looks must still work with it on.
+- Loading a stage profile keeps the playbook choices.
 - This document lives in `docs/design/` beside `ui-redesign.md`.
 
-## Open questions for the user
+## Answers from the user (27 Nov 2026)
 
-1. In rekordbox, is LINK on for every deck you play, and do you ride the
-   pitch by hand? (It tells us how far to trust Link.)
-2. Are real strobes wanted in drops, or should flash-safe stay on?
-3. Is the example stage (two panels, a matrix, a triangle, a square on an
-   H807SA) close to your real rig? If not, a saved stage profile from a
-   real show would make the tests far more useful.
+1. LINK is on for every deck he plays. (Whether he rides the pitch by
+   hand was not answered; the clock rules above cope either way.)
+2. Real strobes are wanted in drops, together with effects that work
+   with the bass.
+3. There is no fixed rig. The stage changes, and changing it must be
+   easy.
