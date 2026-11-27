@@ -155,6 +155,19 @@ fn start(app: &mut View, pick: Pick) {
 
 fn timing(app: &mut View, ui: &mut egui::Ui) {
     let link_ok = crate::link::LinkSync::AVAILABLE;
+    ui.checkbox(&mut app.e.sync.audio_clock, "Find the beat from the music")
+        .on_hover_text("Tempo, the beat and the 1 of the bar come from the kicks. Link and the typed BPM help. Turn off to follow Link or the typed BPM only.");
+    {
+        let r = app.e.tracker.peek(app.e.comp.time_s);
+        let o = &app.e.clock_out;
+        ui.weak(format!(
+            "Clock: {}  ·  {:.1} BPM  ·  music beat {:.0}% sure{}",
+            o.source.name(),
+            o.tempo,
+            r.tempo_conf * 100.0,
+            if o.steady { "" } else { "  ·  not steady, beat-free looks only" }
+        ));
+    }
     ui.add_enabled_ui(link_ok, |ui| {
         ui.checkbox(
             &mut app.e.sync.link_enabled,

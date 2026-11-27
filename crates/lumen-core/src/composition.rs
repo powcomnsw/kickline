@@ -112,8 +112,26 @@ pub struct Composition {
     /// Brightness from the current section's look (1 when looks are off).
     #[serde(skip, default = "one")]
     pub look_level: f32,
+    /// The beat the lights are drawn at (the analysis beat moved earlier by the
+    /// output lookahead).
     #[serde(skip)]
     pub beat: f64,
+    /// The beat aligned to the audio as it arrives: sections and Auto use it.
+    #[serde(skip)]
+    pub analysis_beat: f64,
+    /// Beats since the "1" of the bar, when the clock knows.
+    #[serde(skip)]
+    pub bar_pos: Option<f64>,
+    /// The clock can be trusted (a locked tracker or Link).
+    #[serde(skip)]
+    pub steady: bool,
+    /// Seconds since the engine started (advanced by the engine).
+    #[serde(skip)]
+    pub time_s: f64,
+    #[serde(skip)]
+    pub phrase: crate::set::Phrase,
+    #[serde(skip)]
+    pub memory: crate::set::SetMemory,
     #[serde(skip)]
     pub audio: AudioBands,
 }
@@ -136,6 +154,12 @@ impl Composition {
             auto_groups: Vec::new(),
             look_level: 1.0,
             beat: 0.0,
+            analysis_beat: 0.0,
+            bar_pos: None,
+            steady: false,
+            time_s: 0.0,
+            phrase: Default::default(),
+            memory: Default::default(),
             audio: AudioBands::default(),
         }
     }
@@ -214,6 +238,18 @@ impl Composition {
 
     pub fn tick(&mut self, dt_seconds: f64) {
         self.beat += dt_seconds * self.bpm / 60.0;
+        self.analysis_beat = self.beat;
+        self.bar_pos = None;
+        self.steady = false;
+    }
+
+    /// Take the decided clock: the render beat the lights use, the analysis
+    /// beat the detectors use, and the tempo.
+    pub fn set_clock_out(&mut self, o: &crate::clock::ClockOut) {
+        self.set_clock(o.render_beat, o.tempo);
+        self.analysis_beat = o.analysis_beat;
+        self.bar_pos = o.bar_pos;
+        self.steady = o.steady;
     }
 
     /// Follow an external clock (Ableton Link): jump straight to its beat and tempo.
@@ -226,6 +262,7 @@ impl Composition {
             }
         }
         self.beat = beat;
+        self.analysis_beat = beat;
         self.bpm = bpm;
     }
 
@@ -248,7 +285,15 @@ impl Composition {
         self.audio = audio;
         self.palettes.update(&audio, self.beat);
         self.sections.set_profile(self.director.genre.profile());
-        if let Some(s) = self.sections.update(&audio, self.beat) {
+        let bpb = self.sections.profile.beats_per_bar;
+        self.phrase.update(self.analysis_beat, self.bar_pos, bpb);
+        self.memory.tempo(self.time_s, self.bpm, self.steady);
+        if let Some(s) = self.sections.update(&audio, self.analysis_beat) {
+            self.memory.section(s);
+            // A drop, or the groove returning after a pause, starts a phrase.
+            if matches!(s, Section::Drop) || (s == Section::Groove && matches!(self.sections.past.back(), Some((Section::Pause, _)))) {
+                self.phrase.anchor();
+            }
             if self.looks.auto {
                 self.apply_look(s);
             }

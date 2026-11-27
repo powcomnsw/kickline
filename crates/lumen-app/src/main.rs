@@ -258,12 +258,12 @@ impl View<'_> {
         ui.add_space(5.0);
         ui.horizontal(|ui| {
             // Tempo
-            let synced = self.e.link_status.as_ref().is_some_and(|s| s.peers > 0);
+            let synced = self.e.clock_out.source != lumen_core::ClockSource::Manual;
             ui.add_enabled(
                 !synced,
                 egui::DragValue::new(&mut self.e.comp.bpm).range(20.0..=300.0).speed(0.25).max_decimals(1).suffix(" BPM"),
             )
-            .on_disabled_hover_text("Tempo comes from Ableton Link");
+            .on_disabled_hover_text("Tempo comes from the music (or Ableton Link)");
             ui.toggle_value(&mut self.e.sync.link_enabled, "Link").on_hover_text(if link::LinkSync::AVAILABLE {
                 "Follow tempo and beat from rekordbox via Ableton Link"
             } else {
@@ -365,6 +365,9 @@ impl View<'_> {
             } else {
                 ui.colored_label(t.warn, "Link: waiting for rekordbox");
             }
+        }
+        if let Some(note) = self.e.clock_out.note.clone() {
+            ui.colored_label(t.warn, note);
         }
         ui.add_space(4.0);
         stage::section_card(self, ui, false);

@@ -4,11 +4,13 @@
 //! software uses for its coloured waveforms.
 
 pub mod analyzer;
+pub mod beat;
 pub mod demo;
 pub mod filter;
 pub mod input;
 pub mod mac_tap;
 
+pub use beat::{BeatTracker, Reading as BeatReading};
 pub use analyzer::{Analyzer, KickResponse, Settings, Wake};
 pub use demo::DemoBeat;
 pub use input::{default_input_name, host_name, list_devices, AudioFeed, AudioInput, DeviceInfo, FeedKind, StreamHealth};

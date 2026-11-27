@@ -52,6 +52,8 @@ pub struct SyncSettings {
     pub send_rate_hz: f32,
     /// Send immediately when a kick/snare/hat is detected.
     pub send_on_hit: bool,
+    /// Find the beat from the music itself (Link and the typed BPM help).
+    pub audio_clock: bool,
 }
 
 impl Default for SyncSettings {
@@ -61,6 +63,7 @@ impl Default for SyncSettings {
             lookahead_ms: 20.0,
             send_rate_hz: 44.0,
             send_on_hit: true,
+            audio_clock: true,
         }
     }
 }
@@ -115,6 +118,18 @@ pub struct Engine {
     ticks: u32,
     /// Session recording in progress.
     pub recorder: Option<Recorder>,
+    /// Finds tempo and beat from the audio.
+    pub tracker: lumen_audio::BeatTracker,
+    clock: lumen_core::Clock,
+    /// What the clock decided on the last tick.
+    pub clock_out: lumen_core::ClockOut,
+    /// The tempo the user typed or tapped (the one the demo beat plays at).
+    manual_bpm: f64,
+    /// The tempo the clock last wrote, to tell a user edit from our own.
+    wrote_bpm: f64,
+    time_s: f64,
+    seen_hits: [u64; 2],
+    prev_section: Option<lumen_core::Section>,
 }
 
 impl Engine {
@@ -151,6 +166,14 @@ impl Engine {
             lights: Vec::new(),
             ticks: 0,
             recorder: None,
+            tracker: Default::default(),
+            clock: Default::default(),
+            clock_out: Default::default(),
+            manual_bpm: 120.0,
+            wrote_bpm: 0.0,
+            time_s: 0.0,
+            seen_hits: [0; 2],
+            prev_section: None,
         }
     }
 
@@ -209,25 +232,79 @@ impl Engine {
             .as_secs_f64()
             .clamp(0.0, 0.2);
         self.last_tick = now;
+        self.step(dt, woke_by_hit, now);
+    }
 
-        // Clock: Ableton Link if on and someone else is in the session, else our BPM.
+    /// One tick of `dt` seconds (the real one, or a made-up one in tests).
+    fn step(&mut self, dt: f64, woke_by_hit: bool, _now: Instant) {
+        self.time_s += dt;
+        self.comp.time_s = self.time_s;
+
+        // The tempo the user set by hand: anything that isn't what we wrote last tick.
+        if (self.comp.bpm - self.wrote_bpm).abs() > 1e-9 {
+            self.manual_bpm = self.comp.bpm;
+        }
+
+        // 1. Hear the music and feed the beat tracker.
+        self.read_audio(dt);
+        let audio_on = !matches!(self.audio, AudioSource::Off);
+        if audio_on {
+            let strength = self.bands.raw[1] + self.bands.raw[2];
+            let (k, s) = (self.bands.hits[0], self.bands.hits[1]);
+            if k > self.seen_hits[0] {
+                self.tracker.onset(self.time_s, strength, false);
+            }
+            if s > self.seen_hits[1] {
+                self.tracker.onset(self.time_s, strength, true);
+            }
+            self.seen_hits = [k, s];
+        } else {
+            self.seen_hits = [0; 2];
+        }
+
+        // 2. Link, if on and someone else is in the session.
+        let mut link_clock = None;
         if self.sync.link_enabled {
             let bpm = self.comp.bpm;
             let link = self.link.get_or_insert_with(|| LinkSync::new(bpm));
             link.set_enabled(true);
-            let st = link.clock((self.sync.lookahead_ms * 1000.0) as i64);
-            if st.peers > 0 {
-                self.comp.set_clock(st.beat, st.tempo);
-            } else {
-                self.comp.tick(dt);
-            }
+            let st = link.clock(0);
+            link_clock = Some(lumen_core::LinkClock { peers: st.peers, tempo: st.tempo, beat: st.beat });
             self.link_status = Some(st);
         } else {
             if let Some(l) = &mut self.link {
                 l.set_enabled(false);
             }
             self.link_status = None;
-            self.comp.tick(dt);
+        }
+
+        // 3. Decide the clock: the audio first, Link and the typed BPM as helpers.
+        self.tracker.hint_tempo(link_clock.filter(|l| l.peers > 0).map(|l| l.tempo));
+        if self.ticks % 88 == 0 {
+            self.tracker.resolve_bar();
+        }
+        let r = self.tracker.update(self.time_s);
+        let audio_clock = (audio_on && self.sync.audio_clock).then_some(lumen_core::AudioClock {
+            tempo: r.tempo,
+            beat: r.beat,
+            bar_pos: r.bar_pos,
+            tempo_conf: r.tempo_conf,
+            bar_conf: r.bar_conf,
+            locked: r.locked,
+        });
+        let lookahead = (self.sync.lookahead_ms / 1000.0) as f64;
+        let out = self.clock.step(dt, audio_clock.as_ref(), link_clock.as_ref(), self.manual_bpm, lookahead);
+        self.comp.set_clock_out(&out);
+        self.wrote_bpm = self.comp.bpm;
+        self.clock_out = out;
+
+        // A drop always lands on a "1".
+        let section = self.comp.sections.current();
+        if self.prev_section != Some(section) {
+            if section == lumen_core::Section::Drop && self.prev_section.is_some() {
+                self.tracker.anchor_bar(self.time_s);
+            }
+            self.prev_section = Some(section);
         }
 
         // Auto mode gives each group its own motion: tell it the groups now and then.
@@ -267,13 +344,14 @@ impl Engine {
         }
     }
 
-    fn update_audio(&mut self, dt: f64) {
+    /// Read the analysis from the audio source (before the clock is decided).
+    fn read_audio(&mut self, dt: f64) {
         let settings = self.audio_settings;
         self.bands = match &mut self.audio {
             AudioSource::Off => AudioBands::default(),
             AudioSource::Demo { beat, analyzer } => {
                 analyzer.settings = settings;
-                beat.bpm = self.comp.bpm as f32;
+                beat.bpm = self.manual_bpm as f32;
                 let n = (analyzer.sample_rate() as f64 * dt) as usize;
                 let mut buf = vec![0.0; n];
                 beat.fill(&mut buf);
@@ -289,6 +367,10 @@ impl Engine {
                 feed.bands()
             }
         };
+    }
+
+    /// Hand the analysis to the composition, now the clock is decided.
+    fn update_audio(&mut self, _dt: f64) {
         self.metrics.sample_audio(&self.audio);
         self.comp.set_audio(self.bands);
         self.bands = self.comp.audio; // includes Beat/Bar from the clock
@@ -840,6 +922,55 @@ mod tests {
         assert!(rec.frames.iter().all(|f| f.mark == 5));
         assert!(rec.frames.windows(2).all(|w| w[1].t >= w[0].t));
         assert!(e.stop_recording().is_none());
+    }
+
+    #[test]
+    fn the_clock_follows_the_music_not_the_typed_bpm() {
+        // The demo drum machine plays at 132; the show says 120. After a few
+        // bars the beat tracker should have taken over and the show follows 132.
+        let mut comp = Composition::new(32, 16, 6);
+        comp.bpm = 132.0;
+        let mut e = Engine::new(comp, AdvancedOutput::demo());
+        e.start_demo_audio();
+        // Someone nudges the typed tempo: the demo keeps playing at its own.
+        e.comp.bpm = 132.0;
+        e.manual_bpm = 132.0;
+        let t0 = Instant::now();
+        for _ in 0..(44 * 25) {
+            e.step(1.0 / 44.0, false, t0);
+        }
+        assert_eq!(e.clock_out.source, lumen_core::ClockSource::Audio, "{:?}", e.clock_out);
+        assert!((e.comp.bpm / 132.0 - 1.0).abs() < 0.01, "tempo {}", e.comp.bpm);
+        assert!(e.clock_out.steady);
+        // And the beat lands on the kicks: when a kick is detected the beat is
+        // close to a whole number.
+        let mut offs: Vec<f64> = Vec::new();
+        let mut seen = e.bands.hits[0];
+        for _ in 0..(44 * 10) {
+            e.step(1.0 / 44.0, false, t0);
+            if e.bands.hits[0] > seen {
+                seen = e.bands.hits[0];
+                let b = e.clock_out.analysis_beat;
+                offs.push((b - b.round()).abs() * 60.0 / 132.0);
+            }
+        }
+        // (The build-up plays kicks on the off-beats too, so judge the median kick.)
+        offs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let typical = offs[offs.len() / 2];
+        assert!(typical < 0.03, "kick vs beat: typical {typical} s");
+    }
+
+    #[test]
+    fn a_user_edit_of_the_bpm_is_kept_as_the_manual_tempo() {
+        let mut e = Engine::new(Composition::new(32, 16, 6), AdvancedOutput::demo());
+        let t0 = Instant::now();
+        e.step(0.02, false, t0);
+        e.comp.bpm = 140.0; // typed
+        for _ in 0..50 {
+            e.step(0.02, false, t0);
+        }
+        assert!((e.comp.bpm - 140.0).abs() < 1e-6, "free-runs on the typed tempo");
+        assert_eq!(e.clock_out.source, lumen_core::ClockSource::Manual);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 pub mod audio;
 pub mod blend;
+pub mod clock;
 pub mod color;
 pub mod composition;
 pub mod effect;
@@ -12,6 +13,7 @@ pub mod palette;
 pub mod recording;
 pub mod director;
 pub mod scenes;
+pub mod set;
 pub mod sections;
 pub mod strip;
 
@@ -25,4 +27,6 @@ pub use palette::{Paint, Palette, Palettes};
 pub use strip::{StripClip, StripEffect, StripPixel};
 pub use composition::{StripPass, StripStage};
 pub use sections::{GenreProfile, LayerLook, Looks, Section, SectionDetector, SectionTuning};
+pub use set::{Phrase, SetMemory};
+pub use clock::{AudioClock, Clock, ClockOut, ClockSource, LinkClock};
 pub use director::{Director, DirectorSettings, Genre};

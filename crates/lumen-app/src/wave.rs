@@ -116,14 +116,19 @@ pub fn strip(v: &mut View, ui: &mut egui::Ui) {
     p.line_segment([Pos2::new(area.right() - 1.0, area.top()), Pos2::new(area.right() - 1.0, rect.bottom() - 3.0)], Stroke::new(2.0, Color32::WHITE));
 
     // Big readouts over the left and right ends.
-    let synced = v.e.link_status.as_ref().is_some_and(|s| s.peers > 0);
+    let src = v.e.clock_out.source;
+    let synced = src != lumen_core::ClockSource::Manual;
     let big = theme::bold(34.0);
     let small = egui::FontId::proportional(t.text_size - 3.0);
     let back = t.panel.gamma_multiply(0.82);
     let bpm_box = Rect::from_min_size(rect.min + Vec2::new(8.0, 8.0), Vec2::new(128.0, 58.0));
     p.rect_filled(bpm_box, t.radius, back);
     p.text(bpm_box.min + Vec2::new(10.0, 4.0), egui::Align2::LEFT_TOP, format!("{:.1}", v.e.comp.bpm), big.clone(), t.text);
-    p.text(bpm_box.min + Vec2::new(10.0, 42.0), egui::Align2::LEFT_TOP, if synced { "BPM · LINK" } else { "BPM" }, small.clone(), if synced { t.ok } else { t.weak });
+    p.text(bpm_box.min + Vec2::new(10.0, 42.0), egui::Align2::LEFT_TOP, match src {
+        lumen_core::ClockSource::Audio => "BPM · MUSIC",
+        lumen_core::ClockSource::Link => "BPM · LINK",
+        lumen_core::ClockSource::Manual => "BPM",
+    }, small.clone(), if synced { t.ok } else { t.weak });
 
     let sec = v.e.comp.sections.current();
     let listening = v.e.comp.sections.listening() && !matches!(v.e.audio, crate::engine::AudioSource::Off);
