@@ -10,6 +10,7 @@ pub mod effect;
 pub mod frame;
 pub mod generator;
 pub mod palette;
+pub mod playbook;
 pub mod recording;
 pub mod director;
 pub mod scenes;

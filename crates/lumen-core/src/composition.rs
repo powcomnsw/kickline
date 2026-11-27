@@ -338,6 +338,9 @@ impl Composition {
             beats_in: self.sections.beats_in,
             groups: &self.auto_groups,
             user_playing,
+            phrase: self.phrase,
+            steady: self.steady,
+            drops: self.memory.drops,
         };
         self.director_rt.step(&self.director, &input, &mut self.auto, &mut self.palettes);
     }
@@ -783,6 +786,9 @@ mod tests {
         c.director.on = true;
         let mut a = AudioBands::default();
         a.set(AudioBand::Level, 0.8);
+        // Music is playing (raw loudness), so this is a groove, not a pause.
+        a.raw[AudioBand::Level.index()] = 0.8;
+        a.raw[AudioBand::Bass.index()] = 0.6;
         for _ in 0..400 {
             c.tick(1.0 / 44.0);
             c.set_audio(a);

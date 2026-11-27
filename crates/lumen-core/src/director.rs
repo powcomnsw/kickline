@@ -14,8 +14,9 @@
 use crate::audio::{AudioBand, AudioBands};
 use crate::composition::{Clip, Layer};
 use crate::blend::BlendMode;
-use crate::palette::{Paint, Palettes};
-use crate::scenes::{self, Role, Scene};
+use crate::palette::Palettes;
+use crate::scenes::{self, Role};
+use crate::playbook::{self, Bag, Look, Ramp};
 use crate::sections::{GenreProfile, Section};
 use serde::{Deserialize, Serialize};
 
@@ -125,6 +126,8 @@ pub struct DirectorSettings {
     pub under_manual: f32,
     /// Effects Auto must not use (by name).
     pub off_effects: Vec<String>,
+    /// Looks Auto must not play (by id).
+    pub off_looks: Vec<String>,
     /// Palettes Auto must not use.
     pub off_palettes: Vec<String>,
     /// Groups Auto leaves alone.
@@ -142,6 +145,7 @@ impl Default for DirectorSettings {
             palettes: true,
             under_manual: 0.4,
             off_effects: Vec::new(),
+            off_looks: Vec::new(),
             off_palettes: Vec::new(),
             off_groups: Vec::new(),
         }
@@ -157,6 +161,12 @@ pub struct Input<'a> {
     pub groups: &'a [String],
     /// One of the user's own layers is playing.
     pub user_playing: bool,
+    /// Where we are in the phrase.
+    pub phrase: crate::set::Phrase,
+    /// The beat can be trusted: looks that need it may play.
+    pub steady: bool,
+    /// Drops heard so far in this track (the second drop looks different).
+    pub drops: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -167,15 +177,18 @@ struct Slot {
     cur: usize,
     fade: f32,
     fade_beats: f32,
-    next_change: f64,
     last_pick: f64,
     name: String,
-    recent: Vec<String>,
+    /// The unscaled effect, and the ramp that speeds it up or brightens it.
+    base: Option<crate::generator::Generator>,
+    ramp: Ramp,
+    move_level: f32,
+    speed: f32,
 }
 
 impl Slot {
     fn new(role: Role, group: Option<String>) -> Self {
-        Slot { role, group, cur: 0, fade: 1.0, fade_beats: 1.0, next_change: 0.0, last_pick: -1e9, name: String::new(), recent: Vec::new() }
+        Slot { role, group, cur: 0, fade: 1.0, fade_beats: 1.0, last_pick: -1e9, name: String::new(), base: None, ramp: Ramp::NONE, move_level: 1.0, speed: 1.0 }
     }
 }
 
@@ -198,6 +211,15 @@ pub struct Director {
     /// What Auto is showing: (what it is, effect name).
     pub now: Vec<(String, String)>,
     pub palette_name: String,
+    bags: [Bag; 5],
+    look: Option<&'static Look>,
+    /// Bars since the look was picked.
+    bars_in_look: u32,
+    impact_until: f64,
+    /// The beat the current section started on, for ramps.
+    pub look_name: String,
+    /// Play this look now (a button in Set up asks for it).
+    pub preview: Option<&'static str>,
 }
 
 impl Default for Director {
@@ -215,6 +237,12 @@ impl Default for Director {
             hold: false,
             now: Vec::new(),
             palette_name: String::new(),
+            bags: Default::default(),
+            look: None,
+            bars_in_look: 0,
+            impact_until: -1.0,
+            look_name: String::new(),
+            preview: None,
         }
     }
 }
@@ -288,26 +316,75 @@ impl Director {
         weights.iter().rposition(|w| *w > 0.0)
     }
 
-    fn choose(&mut self, s: &DirectorSettings, role: Role, section: Section, recent: &[String]) -> Option<&'static Scene> {
-        let bank = scenes::bank();
-        let e = self.mood;
-        let weights: Vec<f32> = bank
-            .iter()
-            .map(|sc| {
-                if sc.tags.role != role || s.off_effects.contains(&sc.name) || (sc.tags.strobe && s.flash_safe) {
-                    return 0.0;
+    /// The next look for a section from its shuffled bag.
+    fn pick_look(&mut self, s: &DirectorSettings, section: Section, steady: bool) -> Option<&'static Look> {
+        let ok = |l: &Look| {
+            !s.off_looks.iter().any(|o| o == l.id)
+                && !(l.strobe() && s.flash_safe)
+                && !(l.needs_beat() && !steady)
+                && !l.moves().any(|m| s.off_effects.iter().any(|o| o == m.effect))
+        };
+        let mut bag = std::mem::take(&mut self.bags[section.index()]);
+        let mut look = bag.next(section, ok, || self.rand());
+        if look.is_none() && !steady {
+            // Never go dark for want of a beat-free look: play a beat look instead.
+            look = bag.next(
+                section,
+                |l| !s.off_looks.iter().any(|o| o == l.id) && !(l.strobe() && s.flash_safe) && !l.moves().any(|m| s.off_effects.iter().any(|o| o == m.effect)),
+                || self.rand(),
+            );
+        }
+        self.bags[section.index()] = bag;
+        look
+    }
+
+    fn look_ok(&self, s: &DirectorSettings, l: &Look, steady: bool) -> bool {
+        !s.off_looks.iter().any(|o| o == l.id) && !(l.strobe() && s.flash_safe) && !(l.needs_beat() && !steady) && !l.moves().any(|m| s.off_effects.iter().any(|o| o == m.effect))
+    }
+
+    /// Put a look on the slots: each role gets its move, crossfading from what
+    /// it was playing (a role the look doesn't use fades out).
+    fn apply_look(&mut self, look: &'static Look, inp: &Input, auto: &mut [Layer], instant: bool, beat: f64) {
+        self.look = Some(look);
+        self.look_name = look.id.to_string();
+        self.bars_in_look = 0;
+        for si in 0..self.slots.len() {
+            let role = self.slots[si].role;
+            let mv = match role {
+                Role::Wash => look.wash,
+                Role::Motion => look.motion,
+                Role::Accent => look.accent,
+            };
+            let new = 1 - self.slots[si].cur;
+            let gen = mv.and_then(|m| playbook::generator_for(&m, inp.drops, inp.section).map(|g| (m, g)));
+            let l = &mut auto[si * 2 + new];
+            let sl = &mut self.slots[si];
+            match gen {
+                Some((m, g)) => {
+                    sl.base = Some(g.clone());
+                    sl.ramp = m.ramp;
+                    sl.move_level = m.level;
+                    sl.speed = m.ramp.speed_at(0.0);
+                    let g = if m.ramp.is_none() { g } else { playbook::scale_speed(&g, sl.speed) };
+                    l.clips[0] = Some(Clip::new(m.effect, g));
+                    l.active = Some(0);
+                    l.trigger_beat = beat;
+                    sl.name = m.effect.to_string();
                 }
-                let mut w = fit(sc.tags.energy, e);
-                if !sc.tags.suits(section) {
-                    w *= 0.3;
+                None => {
+                    l.clips[0] = None;
+                    l.active = None;
+                    sl.base = None;
+                    sl.ramp = Ramp::NONE;
+                    sl.move_level = 1.0;
+                    sl.name = "—".into();
                 }
-                if recent.contains(&sc.name) {
-                    w *= 0.15;
-                }
-                w
-            })
-            .collect();
-        self.weighted(&weights).map(|i| &bank[i])
+            }
+            sl.cur = new;
+            sl.fade = 0.0;
+            sl.fade_beats = if instant { 0.25 } else { role_fade(role) };
+            sl.last_pick = beat;
+        }
     }
 
     fn pick_palette(&mut self, s: &DirectorSettings, palettes: &mut Palettes, beat: f64) {
@@ -396,41 +473,47 @@ impl Director {
         let duck_target = if inp.user_playing { s.under_manual.clamp(0.0, 1.0) } else { 1.0 };
         self.duck += (duck_target - self.duck) * (dbeat as f32).min(1.0);
 
-        let bars = s.change_bars.max(1) as f64 * s.genre.pace();
+        // Which look: a new one when the section changes, and in a long section
+        // on a phrase line (every 8 bars) once the look has had its time.
+        let bar_beats = s.genre.profile().bar_beats();
+        if inp.phrase.new_bar {
+            self.bars_in_look += 1;
+        }
+        let min_bars = ((s.change_bars.max(1) as f64 * 2.0 * s.genre.pace()).round() as u32).max(4);
+        let line = inp.phrase.new_bar && inp.phrase.bar_in_phrase % 8 == 0;
+        let long_section = !matches!(inp.section, Section::Pause | Section::Drop) || inp.beats_in >= bar_beats * 8;
+        let stale = self.look.is_some_and(|l| !self.look_ok(s, l, inp.steady));
+        if let Some(l) = self.preview.take().and_then(playbook::find) {
+            self.apply_look(l, inp, auto, true, beat);
+        }
+        let want_new = self.look.is_none() || stale || (changed && !self.hold) || (!self.hold && line && self.bars_in_look >= min_bars && long_section);
+        if want_new {
+            if let Some(look) = self.pick_look(s, inp.section, inp.steady) {
+                self.apply_look(look, inp, auto, instant, beat);
+                if inp.section == Section::Drop && changed {
+                    // A drop lands with a one-bar impact before its look settles.
+                    self.impact_until = beat + bar_beats as f64;
+                }
+            }
+        }
+
+        // Ramps: speed and brightness follow how far through the section we are.
+        let progress = (inp.beats_in as f32 / 32.0).clamp(0.0, 1.0);
         for si in 0..self.slots.len() {
-            let (role, first) = (self.slots[si].role, self.slots[si].name.is_empty());
-            let due = !self.hold && beat >= self.slots[si].next_change && bar_crossed;
-            let forced = !self.hold && changed && inp.section != Section::Pause && (instant || beat - self.slots[si].last_pick >= 4.0);
-            if first || due || forced {
-                let recent = self.slots[si].recent.clone();
-                if let Some(sc) = self.choose(s, role, inp.section, &recent) {
-                    let mut g = sc.generator.clone();
-                    let slot = (self.rand() * 4.0) as u8 % 4;
-                    if let Some(p) = g.paint_mut() {
-                        *p = Paint::Slot(slot);
+            let ramp = self.slots[si].ramp;
+            if ramp.is_none() {
+                continue;
+            }
+            let f = ramp.speed_at(progress);
+            if (f - self.slots[si].speed).abs() > 0.04 {
+                if let Some(base) = self.slots[si].base.clone() {
+                    let (idx, old) = (si * 2 + self.slots[si].cur, self.slots[si].speed);
+                    if let Some(c) = auto[idx].clips[0].as_mut() {
+                        c.generator = playbook::scale_speed(&base, f);
                     }
-                    let new = 1 - self.slots[si].cur;
-                    let l = &mut auto[si * 2 + new];
-                    l.clips[0] = Some(Clip::new(sc.name.clone(), g));
-                    l.active = Some(0);
-                    l.trigger_beat = beat;
-                    let hold_beats = 4.0
-                        * match role {
-                            Role::Wash => bars * 2.0,
-                            Role::Motion => bars,
-                            Role::Accent => (bars * 0.5).max(1.0),
-                        };
-                    let sl = &mut self.slots[si];
-                    sl.cur = new;
-                    sl.fade = 0.0;
-                    sl.fade_beats = if instant { 0.25 } else { role_fade(role) };
-                    sl.last_pick = beat;
-                    sl.next_change = beat + hold_beats - 0.5;
-                    sl.name = sc.name.clone();
-                    sl.recent.push(sc.name.clone());
-                    if sl.recent.len() > 3 {
-                        sl.recent.remove(0);
-                    }
+                    // Keep the effect's phase where it was while it speeds up.
+                    auto[idx].trigger_beat = beat - (beat - auto[idx].trigger_beat) * (old / f) as f64;
+                    self.slots[si].speed = f;
                 }
             }
         }
@@ -442,7 +525,13 @@ impl Director {
 
         // Levels and the crossfade.
         for si in 0..self.slots.len() {
-            let level = self.energy.powf(0.8) * role_gain(self.slots[si].role) * self.duck;
+            let sl0 = &self.slots[si];
+            let mut level = self.energy.powf(0.8) * role_gain(sl0.role) * self.duck * sl0.move_level * sl0.ramp.level_at(progress);
+            if beat < self.impact_until {
+                // The impact: everything hits hard, easing down over the bar.
+                let k = ((self.impact_until - beat) / bar_beats as f64).clamp(0.0, 1.0) as f32;
+                level = level + (1.0 - level) * k * if sl0.role == Role::Motion { 0.4 } else { 1.0 };
+            }
             let sl = &mut self.slots[si];
             sl.fade = (sl.fade + dbeat as f32 / sl.fade_beats.max(0.01)).min(1.0);
             let (new, old) = (si * 2 + sl.cur, si * 2 + 1 - sl.cur);
@@ -475,6 +564,8 @@ impl Director {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generator::Generator;
+    use crate::palette::Paint;
 
     struct Rig {
         d: Director,
@@ -485,13 +576,16 @@ mod tests {
         beat: f64,
         groups: Vec<String>,
         user: bool,
+        phrase: crate::set::Phrase,
+        steady: bool,
+        drops: u32,
     }
 
     impl Rig {
         fn new() -> Self {
             let mut d = Director::default();
             d.seed(7);
-            Rig { d, s: DirectorSettings { on: true, ..Default::default() }, auto: Vec::new(), pal: Palettes::default(), audio: AudioBands::default(), beat: 0.0, groups: Vec::new(), user: false }
+            Rig { d, s: DirectorSettings { on: true, ..Default::default() }, auto: Vec::new(), pal: Palettes::default(), audio: AudioBands::default(), beat: 0.0, groups: Vec::new(), user: false, phrase: Default::default(), steady: true, drops: 0 }
         }
 
         /// Play `beats` beats of a section (20 steps a beat). Returns the effect names seen.
@@ -499,7 +593,8 @@ mod tests {
             let mut seen: Vec<String> = Vec::new();
             for b in 0..beats * 20 {
                 self.audio.set(AudioBand::Level, 0.7);
-                let inp = Input { audio: &self.audio, beat: self.beat, section, beats_in: b / 20, groups: &self.groups, user_playing: self.user };
+                self.phrase.update(self.beat, None, 4);
+                let inp = Input { audio: &self.audio, beat: self.beat, section, beats_in: b / 20, groups: &self.groups, user_playing: self.user, phrase: self.phrase, steady: self.steady, drops: self.drops };
                 self.d.step(&self.s, &inp, &mut self.auto, &mut self.pal);
                 for (_, n) in &self.d.now {
                     if !n.is_empty() && !seen.contains(n) {
@@ -688,5 +783,160 @@ mod tests {
         let calm_hits = calm[7] + calm[6];
         let wild_hits = wild[7] + wild[6];
         assert!(calm_hits > wild_hits, "calm {calm:?} wild {wild:?} ({})", name(7));
+    }
+
+    #[test]
+    fn a_section_never_plays_the_same_look_twice_running() {
+        let mut r = Rig::new();
+        r.s.flash_safe = false;
+        let mut drops = Vec::new();
+        let mut grooves = Vec::new();
+        for _ in 0..24 {
+            r.play(Section::Drop, 8);
+            drops.push(r.d.look_name.clone());
+            r.play(Section::Groove, 8);
+            grooves.push(r.d.look_name.clone());
+        }
+        for v in [&drops, &grooves] {
+            for w in v.windows(2) {
+                assert_ne!(w[0], w[1], "{v:?}");
+            }
+        }
+        // Every drop look gets used before any is used again.
+        let n = playbook::looks_for(Section::Drop).count();
+        for round in drops.chunks(n).take(2) {
+            let mut ids = round.to_vec();
+            ids.sort();
+            ids.dedup();
+            assert_eq!(ids.len(), round.len(), "{round:?}");
+        }
+    }
+
+    #[test]
+    fn build_ups_only_get_the_build_up_family_and_speed_up() {
+        let mut r = Rig::new();
+        r.s.flash_safe = false;
+        for _ in 0..12 {
+            r.play(Section::Groove, 4);
+            r.play(Section::BuildUp, 2);
+            assert!(r.d.look_name.starts_with("build-"), "{}", r.d.look_name);
+        }
+        // A build-up brightens and speeds up as it goes.
+        r.play(Section::Groove, 4);
+        r.play(Section::BuildUp, 2);
+        let early: f32 = r.auto.iter().map(|l| l.opacity).sum();
+        let speed_early = r.d.slots.iter().map(|s| s.speed).fold(0.0, f32::max);
+        r.play(Section::BuildUp, 28);
+        let late: f32 = r.auto.iter().map(|l| l.opacity).sum();
+        let speed_late = r.d.slots.iter().map(|s| s.speed).fold(0.0, f32::max);
+        assert!(late > early * 1.2, "{early} -> {late}");
+        assert!(speed_late > speed_early * 1.5, "{speed_early} -> {speed_late}");
+    }
+
+    #[test]
+    fn a_drop_lands_with_an_impact_that_eases_off() {
+        let mut r = Rig::new();
+        r.play(Section::Groove, 16);
+        // Step the first bar of the drop and measure the brightest moment against the settled look.
+        let mut peak = 0.0f32;
+        for b in 0..(4 * 20) {
+            self_step(&mut r, Section::Drop, b / 20);
+            peak = peak.max(r.auto.iter().map(|l| l.opacity).sum());
+        }
+        let mut settled = 0.0f32;
+        for b in 0..(8 * 20) {
+            self_step(&mut r, Section::Drop, 4 + b / 20);
+            settled = r.auto.iter().map(|l| l.opacity).sum();
+        }
+        assert!(peak > settled * 1.15, "impact {peak} vs settled {settled}");
+    }
+
+    fn self_step(r: &mut Rig, section: Section, beats_in: u32) {
+        r.audio.set(AudioBand::Level, 0.7);
+        r.phrase.update(r.beat, None, 4);
+        let inp = Input { audio: &r.audio, beat: r.beat, section, beats_in, groups: &r.groups, user_playing: r.user, phrase: r.phrase, steady: r.steady, drops: r.drops };
+        r.d.step(&r.s, &inp, &mut r.auto, &mut r.pal);
+        r.beat += 0.05;
+    }
+
+    #[test]
+    fn the_pause_is_dark_with_at_most_one_small_element() {
+        let mut r = Rig::new();
+        for _ in 0..10 {
+            r.play(Section::Drop, 8);
+            r.play(Section::Pause, 3);
+            let lit = r.auto.iter().filter(|l| l.active.is_some() && l.opacity > 0.01).count();
+            assert!(lit <= 1, "{lit} layers lit in the pause ({})", r.d.look_name);
+            assert!(r.auto.iter().map(|l| l.opacity).sum::<f32>() < 0.2);
+        }
+    }
+
+    #[test]
+    fn without_a_steady_beat_only_beat_free_looks_play() {
+        let mut r = Rig::new();
+        r.steady = false;
+        r.s.flash_safe = false;
+        for _ in 0..30 {
+            for sec in [Section::Groove, Section::Melodic, Section::Drop] {
+                r.play(sec, 8);
+                let l = playbook::find(&r.d.look_name).unwrap();
+                assert!(!l.needs_beat(), "{} needs the beat", l.id);
+            }
+            // A section with no beat-free look still plays something rather than going dark.
+            r.play(Section::BuildUp, 8);
+            assert!(r.auto.iter().any(|l| l.active.is_some() && l.opacity > 0.05));
+        }
+    }
+
+    #[test]
+    fn looks_can_be_switched_off_and_every_section_keeps_one() {
+        let mut r = Rig::new();
+        r.s.off_looks = vec!["drop-flash".into(), "drop-burst".into()];
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..40 {
+            r.play(Section::Drop, 8);
+            r.play(Section::Groove, 8);
+            seen.insert(r.d.look_name.clone());
+        }
+        assert!(!seen.contains("drop-flash") && !seen.contains("drop-burst"));
+        // Even with all but one off, that one plays rather than nothing.
+        let keep = "groove-sweep";
+        r.s.off_looks = playbook::looks_for(Section::Groove).filter(|l| l.id != keep).map(|l| l.id.to_string()).collect();
+        r.play(Section::Melodic, 8);
+        r.play(Section::Groove, 8);
+        assert_eq!(r.d.look_name, keep);
+    }
+
+    #[test]
+    fn a_long_section_moves_on_at_a_phrase_line() {
+        let mut r = Rig::new();
+        r.play(Section::Groove, 4);
+        let first = r.d.look_name.clone();
+        let mut changes = Vec::new();
+        let mut last = first.clone();
+        for _ in 0..(16 * 4) {
+            r.play(Section::Groove, 1);
+            if r.d.look_name != last {
+                changes.push(r.beat);
+                last = r.d.look_name.clone();
+            }
+        }
+        assert!(!changes.is_empty(), "never moved on in 16 bars");
+        for c in changes {
+            let bar = (c / 4.0).round() as i64;
+            assert_eq!(bar % 8, 0, "changed at beat {c}, not on an 8 bar line");
+        }
+    }
+
+    #[test]
+    fn the_second_drop_paints_a_different_colour() {
+        let slot_of = |drops: u32| {
+            let m = playbook::find("drop-chase").unwrap().motion.unwrap();
+            match playbook::generator_for(&m, drops, Section::Drop).unwrap() {
+                Generator::Chase { color: Paint::Slot(s), .. } => s,
+                g => panic!("{g:?}"),
+            }
+        };
+        assert_ne!(slot_of(1), slot_of(2));
     }
 }

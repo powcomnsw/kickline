@@ -6,7 +6,7 @@
 
 use crate::{stage, theme, View};
 use eframe::egui::{self, Color32, RichText, Vec2};
-use lumen_core::{scenes, Genre, Section};
+use lumen_core::{playbook, scenes, Genre, Section};
 
 /// Add `name` to `list` when it is switched off, take it out when it is on.
 fn allow(list: &mut Vec<String>, name: &str, on: bool) {
@@ -82,6 +82,12 @@ pub fn card(v: &mut View, ui: &mut egui::Ui) {
         ui.label(RichText::new(txt).color(col));
         ui.label(RichText::new(format!("energy {:.0}% · sure {:.0}%", d.energy * 100.0, v.e.comp.sections.reading.confidence * 100.0)).color(t.weak).size(t.text_size - 2.0));
     });
+    if !d.look_name.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Look").color(t.weak).size(t.text_size - 2.0));
+            ui.label(RichText::new(look_title(&d.look_name)).size(t.text_size - 1.0));
+        });
+    }
     for (what, name) in &d.now {
         ui.horizontal(|ui| {
             ui.label(RichText::new(what).color(t.weak).size(t.text_size - 2.0));
@@ -155,6 +161,38 @@ pub fn page(v: &mut View, ui: &mut egui::Ui) {
                 }
             }
         });
+        section_box(ui, "Looks for each part of a song", |ui| {
+            ui.label(RichText::new("Auto plays these in a shuffled order: every look once before any repeats. Untick the ones you don't want. Preview plays one now.").color(t.weak).size(t.text_size - 3.0));
+            for s in Section::ALL {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("●").color(stage::section_color(s)));
+                    ui.label(RichText::new(s.name()).font(theme::bold(t.text_size)));
+                    ui.label(RichText::new(s.note()).color(t.weak).size(t.text_size - 3.0));
+                });
+                for l in playbook::looks_for(s) {
+                    let mut on = !v.e.comp.director.off_looks.iter().any(|o| o == l.id);
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut on, "").changed() {
+                            allow(&mut v.e.comp.director.off_looks, l.id, on);
+                        }
+                        let now = v.e.comp.director_rt.look_name == l.id;
+                        left_label(ui, 150.0, RichText::new(look_title(l.id)).color(if now { t.accent } else if on { t.text } else { t.weak }));
+                        let moves: Vec<&str> = l.moves().map(|m| m.effect).collect();
+                        ui.label(RichText::new(if moves.is_empty() { "dark".to_string() } else { moves.join(" + ") }).color(t.weak).size(t.text_size - 3.0));
+                        if l.strobe() {
+                            ui.colored_label(t.warn, "strobe");
+                        }
+                        if ui.small_button("Preview").clicked() {
+                            if !v.e.comp.director.on {
+                                toggle_auto(v);
+                            }
+                            v.e.comp.director_rt.preview = Some(l.id);
+                        }
+                    });
+                }
+            }
+        });
         section_box(ui, "Effects Auto may use", |ui| {
             for (cat, note, list) in scenes::catalog() {
                 ui.label(RichText::new(cat).font(theme::bold(t.text_size)));
@@ -202,6 +240,13 @@ pub fn page(v: &mut View, ui: &mut egui::Ui) {
             }
         });
     });
+}
+
+/// "groove-bass-wash" as "Bass wash".
+fn look_title(id: &str) -> String {
+    let rest = id.split_once('-').map_or(id, |(_, r)| r).replace('-', " ");
+    let mut c = rest.chars();
+    c.next().map_or(String::new(), |f| f.to_uppercase().collect::<String>() + c.as_str())
 }
 
 /// A label of a fixed width, text to the left.
