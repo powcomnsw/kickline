@@ -98,7 +98,7 @@ impl Look {
 /// Does this effect only make sense on a steady beat? Washes, twinkles and
 /// the drum-driven ones follow the music itself, not the beat grid.
 pub fn effect_needs_beat(effect: &str) -> bool {
-    !matches!(effect, "Solid" | "Palette wash" | "Rainbow" | "Plasma" | "Twinkle" | "Bands" | "Bass meter" | "Hi-hat sparkle" | "Kick flash" | "Kick burst" | "Kick alternate" | "Snare segments")
+    !matches!(effect, "Solid" | "Palette wash" | "Rainbow" | "Plasma" | "Twinkle" | "Bands" | "Bass meter" | "Breathe" | "Bass throb" | "Bass bloom" | "Hi-hat sparkle" | "Kick flash" | "Kick burst" | "Kick alternate" | "Snare segments")
 }
 
 /// Which stage role an effect was written for: travelling effects run on a
@@ -108,7 +108,7 @@ pub fn lead_for(effect: &str) -> crate::roles::StageRole {
     match effect {
         "Meteor" | "Meteor bounce" | "Dashes" | "Chase" | "Fill to the bar" | "Wave across strips" => Path,
         "Left ↔ right" | "Sweep in" | "Sweep out" | "Wipe" => Left,
-        "Radar" | "Up ↕ down" | "Bass meter" | "Bands" => Centre,
+        "Radar" | "Up ↕ down" | "Bass meter" | "Bands" | "Bass bloom" | "Burst" => Centre,
         _ => Fill,
     }
 }
@@ -132,6 +132,9 @@ pub const LOOKS: &[Look] = &[
     look("groove-bass", Groove, Some(mv("Plasma", 1, 0.45)), Some(mv("Bass meter", 0, 1.0)), Some(mv("Kick alternate", 2, 0.8))),
     look("groove-bass-sparkle", Groove, Some(mv("Plasma", 2, 0.45)), Some(mv("Bass meter", 1, 1.0)), Some(mv("Hi-hat sparkle", 3, 0.8))),
     look("groove-bass-wash", Groove, Some(mv("Palette wash", 3, 0.5)), Some(mv("Bass meter", 2, 1.0)), Some(mv("Kick burst", 0, 0.8))),
+    look("groove-bloom", Groove, Some(mv("Plasma", 3, 0.45)), Some(mv("Bass bloom", 0, 1.0)), Some(mv("Hi-hat sparkle", 2, 0.8))),
+    look("groove-burst", Groove, Some(mv("Palette wash", 0, 0.45)), Some(mv("Burst", 1, 1.0)), Some(mv("Kick alternate", 3, 0.8))),
+    look("groove-checker", Groove, Some(mv("Solid", 0, 0.25)), Some(mv("Checker swap", 2, 0.9)), Some(mv("Kick burst", 1, 0.8))),
     // ---- Melodic: slow and soft.
     look("melodic-breathe", Melodic, Some(mv("Palette wash", 0, 0.55)), None, Some(mv("Twinkle", 3, 0.5))),
     look("melodic-plasma", Melodic, Some(mv("Plasma", 1, 0.5)), None, Some(mv("Twinkle", 2, 0.4))),
@@ -141,6 +144,8 @@ pub const LOOKS: &[Look] = &[
     look("melodic-meteor", Melodic, Some(mv("Plasma", 2, 0.4)), Some(ramped("Meteor", 1, 0.55, Ramp { level: (1.0, 1.0), speed: (0.5, 0.5) })), None),
     look("melodic-sparkle", Melodic, Some(mv("Palette wash", 1, 0.4)), None, Some(mv("Hi-hat sparkle", 3, 0.5))),
     look("melodic-updown", Melodic, Some(mv("Solid", 2, 0.3)), Some(ramped("Up ↕ down", 0, 0.5, Ramp { level: (1.0, 1.0), speed: (0.5, 0.5) })), Some(mv("Twinkle", 1, 0.4))),
+    look("melodic-breath", Melodic, Some(mv("Breathe", 0, 0.5)), None, Some(mv("Twinkle", 3, 0.4))),
+    look("melodic-glow", Melodic, Some(mv("Breathe", 1, 0.45)), Some(ramped("Radar", 2, 0.5, Ramp { level: (1.0, 1.0), speed: (0.4, 0.4) })), None),
     // ---- Build-up: chases and fills that speed up and tighten.
     look("build-fill", BuildUp, Some(ramped("Palette wash", 0, 0.5, Ramp::BUILD)), Some(ramped("Fill to the bar", 2, 1.0, Ramp::BUILD)), Some(ramped("Snare segments", 3, 0.9, Ramp::BUILD))),
     look("build-chase", BuildUp, Some(ramped("Solid", 1, 0.4, Ramp::BUILD)), Some(ramped("Chase", 0, 1.0, Ramp::BUILD)), Some(ramped("Beat pulse", 3, 0.8, Ramp::BUILD))),
@@ -149,12 +154,20 @@ pub const LOOKS: &[Look] = &[
     look("build-bounce", BuildUp, Some(ramped("Solid", 2, 0.4, Ramp::BUILD)), Some(ramped("Meteor bounce", 0, 1.0, Ramp::BUILD)), Some(ramped("Hi-hat sparkle", 3, 0.9, Ramp::BUILD))),
     look("build-radar", BuildUp, Some(ramped("Palette wash", 0, 0.45, Ramp::BUILD)), Some(ramped("Radar", 1, 1.0, Ramp::BUILD)), Some(ramped("Snare segments", 2, 0.9, Ramp::BUILD))),
     look("build-wipe", BuildUp, Some(ramped("Plasma", 1, 0.5, Ramp::BUILD)), Some(ramped("Wipe", 2, 1.0, Ramp::BUILD)), Some(ramped("Beat pulse", 3, 0.8, Ramp::BUILD))),
+    look("build-burst", BuildUp, Some(ramped("Palette wash", 2, 0.45, Ramp::BUILD)), Some(ramped("Burst", 0, 1.0, Ramp::BUILD)), Some(ramped("Beat pulse", 3, 0.8, Ramp::BUILD))),
+    look("build-checker", BuildUp, Some(ramped("Solid", 0, 0.4, Ramp::BUILD)), Some(ramped("Checker swap", 2, 0.9, Ramp::BUILD)), Some(ramped("Snare segments", 3, 0.9, Ramp::BUILD))),
     look("build-strobe", BuildUp, Some(ramped("Solid", 0, 0.4, Ramp::BUILD)), Some(ramped("Chase", 2, 1.0, Ramp::BUILD)), Some(ramped("Strobe", 3, 0.9, Ramp { level: (0.2, 1.0), speed: (1.0, 1.0) }))),
     // ---- Pause: dark, one small element at most.
     look("pause-dark", Pause, None, None, None),
     look("pause-twinkle", Pause, None, None, Some(mv("Twinkle", 3, 0.5))),
     look("pause-pulse", Pause, None, None, Some(mv("Beat pulse", 0, 0.5))),
     look("pause-bands", Pause, None, None, Some(mv("Bands", 1, 0.5))),
+    look("pause-breathe", Pause, None, None, Some(mv("Breathe", 1, 0.35))),
+    look("pause-throb", Pause, None, None, Some(mv("Bass throb", 2, 0.3))),
+    look("pause-bloom", Pause, None, None, Some(mv("Bass bloom", 0, 0.35))),
+    look("pause-sparkle", Pause, None, None, Some(mv("Hi-hat sparkle", 3, 0.4))),
+    look("pause-radar", Pause, None, Some(ramped("Radar", 1, 0.3, Ramp { level: (1.0, 1.0), speed: (0.3, 0.3) })), None),
+    look("pause-wipe", Pause, None, Some(ramped("Wipe", 2, 0.3, Ramp { level: (1.0, 1.0), speed: (0.3, 0.3) })), None),
     // ---- Drop: the whole rig, high contrast.
     look("drop-strobe", Drop, Some(mv("Solid", 3, 0.5)), Some(mv("Chase", 0, 1.0)), Some(mv("Strobe", 3, 1.0))),
     look("drop-strobe-rainbow", Drop, Some(mv("Rainbow", 0, 0.8)), Some(mv("Sweep out", 1, 1.0)), Some(mv("Strobe", 3, 1.0))),
@@ -164,6 +177,8 @@ pub const LOOKS: &[Look] = &[
     look("drop-bass-sweep", Drop, Some(mv("Rainbow", 2, 0.6)), Some(mv("Sweep out", 0, 1.0)), Some(mv("Kick burst", 3, 0.9))),
     look("drop-chase", Drop, Some(mv("Solid", 1, 0.5)), Some(mv("Chase", 2, 1.0)), Some(mv("Kick flash", 3, 1.0))),
     look("drop-bounce", Drop, Some(mv("Plasma", 2, 0.7)), Some(mv("Meteor bounce", 0, 1.0)), Some(mv("Hi-hat sparkle", 3, 0.9))),
+    look("drop-bloom", Drop, Some(mv("Bass throb", 1, 0.6)), Some(mv("Bass bloom", 0, 1.0)), Some(mv("Kick flash", 3, 1.0))),
+    look("drop-ring", Drop, Some(mv("Rainbow", 1, 0.6)), Some(mv("Burst", 0, 1.0)), Some(mv("Kick burst", 3, 0.9))),
 ];
 
 /// The built-in looks for a section.
@@ -195,7 +210,8 @@ pub fn scale_speed(g: &Generator, f: f32) -> Generator {
         Generator::Chase { beats_per_cycle, .. } | Generator::Rainbow { beats_per_cycle, .. } | Generator::PaletteWash { beats_per_cycle } => *beats_per_cycle /= f,
         Generator::Radar { beats_per_turn, .. } => *beats_per_turn /= f,
         Generator::LeftRight { beats, .. } | Generator::Scanner { beats, .. } | Generator::Sweep { beats, .. } | Generator::Wipe { beats, .. } => *beats /= f,
-        Generator::Strobe { per_beat, .. } | Generator::BeatPulse { per_beat, .. } | Generator::Twinkle { per_beat, .. } => *per_beat *= f,
+        Generator::Strobe { per_beat, .. } | Generator::BeatPulse { per_beat, .. } | Generator::Twinkle { per_beat, .. } | Generator::Burst { per_beat, .. } => *per_beat *= f,
+        Generator::Breathe { beats, .. } | Generator::Checker { beats, .. } => *beats /= f,
         Generator::Plasma { speed, .. } => *speed *= f,
         Generator::Strip(sc) => match &mut sc.effect {
             StripEffect::Meteor { beats, .. } | StripEffect::Fill { beats, .. } | StripEffect::Dashes { beats, .. } => *beats /= f,
@@ -373,5 +389,55 @@ mod tests {
         assert!(!effect_needs_beat("Kick burst"));
         assert!(effect_needs_beat("Chase"));
         assert!(look("x", Groove, Some(mv("Plasma", 0, 1.0)), None, Some(mv("Kick burst", 0, 1.0))).needs_beat() == false);
+    }
+
+    #[test]
+    fn each_section_has_about_ten_looks_and_drops_keep_enough_without_strobes() {
+        for s in Section::ALL {
+            assert!(looks_for(s).count() >= 10, "{s:?} has {}", looks_for(s).count());
+        }
+        let drops: Vec<_> = looks_for(Drop).collect();
+        assert!(drops.iter().filter(|l| l.strobe()).count() >= 2, "real strobes");
+        assert!(drops.iter().filter(|l| !l.strobe()).count() >= 6, "flash-safe drops");
+        let bass = |l: &&&Look| l.moves().any(|m| matches!(m.effect, "Bass meter" | "Bass throb" | "Bass bloom"));
+        assert!(drops.iter().filter(bass).count() >= 2, "bass-driven drops");
+        assert!(looks_for(Groove).collect::<Vec<_>>().iter().filter(bass).count() >= 2, "bass-driven grooves");
+    }
+
+    #[test]
+    fn every_look_draws_something_when_played() {
+        use crate::audio::{AudioBand, AudioBands};
+        use crate::frame::Frame;
+        let pal = [[1.0, 0.2, 0.2], [0.2, 1.0, 0.2], [0.2, 0.2, 1.0], [1.0, 1.0, 1.0]];
+        let mut a = AudioBands::default();
+        for b in [AudioBand::Level, AudioBand::Sub, AudioBand::Bass, AudioBand::Kick, AudioBand::Snare, AudioBand::HiHat, AudioBand::Beat, AudioBand::LowMid, AudioBand::HighMid, AudioBand::High] {
+            a.set(b, 0.8);
+        }
+        for l in LOOKS.iter().filter(|l| l.moves().count() > 0) {
+            for m in l.moves() {
+                let g = generator_for(m, 0, l.section).expect("effect");
+                let mut seen = 0.0f32;
+                for k in 0..24 {
+                    let beat = 1.0 + k as f64 * 0.17;
+                    for h in a.hits.iter_mut() {
+                        *h = k as _;
+                    }
+                    match &g {
+                        Generator::Strip(sc) => {
+                            for x in 0..30 {
+                                let p = crate::strip::StripPixel { fixture: 1, fixtures: 3, index: x, count: 30, x: x as f32 / 29.0, y: 0.5 };
+                                seen = seen.max(sc.shade(p, beat, &a, &pal).a);
+                            }
+                        }
+                        g => {
+                            let mut f = Frame::transparent(16, 16);
+                            g.render(&mut f, beat, &a, &pal);
+                            seen = f.pixels.iter().fold(seen, |m, p| m.max(p.a));
+                        }
+                    }
+                }
+                assert!(seen > 0.05, "{}: {} draws nothing", l.id, m.effect);
+            }
+        }
     }
 }

@@ -42,6 +42,16 @@ pub enum Generator {
     BeatPulse { color: Paint, per_beat: f32, fade: f32 },
     /// Random spots flash and fade.
     Twinkle { color: Paint, density: f32, per_beat: f32 },
+    /// Everything rises and falls slowly, once every `beats` beats.
+    Breathe { color: Paint, beats: f32 },
+    /// Everything throbs with the bass: brightness follows the bass level.
+    Throb { color: Paint },
+    /// A shape grows from the middle as the bass gets stronger.
+    Grow { color: Paint },
+    /// A ring leaves the middle on every beat.
+    Burst { color: Paint, per_beat: f32 },
+    /// A checkerboard whose two colours swap every `beats` beats.
+    Checker { color: Paint, beats: f32 },
 }
 
 /// A small, fast hash for random-looking but repeatable patterns.
@@ -97,6 +107,11 @@ impl Generator {
             Generator::Wipe { .. } => "Wipe",
             Generator::BeatPulse { .. } => "Beat pulse",
             Generator::Twinkle { .. } => "Twinkle",
+            Generator::Breathe { .. } => "Breathe",
+            Generator::Throb { .. } => "Bass throb",
+            Generator::Grow { .. } => "Bass bloom",
+            Generator::Burst { .. } => "Burst",
+            Generator::Checker { .. } => "Checker swap",
         }
     }
 
@@ -114,7 +129,12 @@ impl Generator {
             | Generator::Sweep { color, .. }
             | Generator::Wipe { color, .. }
             | Generator::BeatPulse { color, .. }
-            | Generator::Twinkle { color, .. } => Some(color),
+            | Generator::Twinkle { color, .. }
+            | Generator::Breathe { color, .. }
+            | Generator::Throb { color }
+            | Generator::Grow { color }
+            | Generator::Burst { color, .. }
+            | Generator::Checker { color, .. } => Some(color),
             Generator::Strip(sc) => Some(sc.effect.paint_mut()),
             Generator::Rainbow { .. } | Generator::Plasma { .. } | Generator::PaletteWash { .. } | Generator::Bands => None,
         }
@@ -252,6 +272,42 @@ impl Generator {
                     } else {
                         Rgba::TRANSPARENT
                     }
+                });
+            }
+            Generator::Breathe { color, beats } => {
+                let c = color.resolve(palette);
+                let ph = (beat / beats.max(0.1) as f64).fract() as f32;
+                let k = 0.5 - 0.5 * (ph * std::f32::consts::TAU).cos();
+                frame.fill_with(|_, _| lit(c, k));
+            }
+            Generator::Throb { color } => {
+                let c = color.resolve(palette);
+                let k = audio.get(AudioBand::Bass).max(audio.get(AudioBand::Sub));
+                frame.fill_with(|_, _| lit(c, k));
+            }
+            Generator::Grow { color } => {
+                let c = color.resolve(palette);
+                let r = audio.get(AudioBand::Bass).max(audio.get(AudioBand::Sub)) * 0.75;
+                frame.fill_with(|u, v| {
+                    let d = ((u - 0.5).powi(2) + (v - 0.5).powi(2)).sqrt();
+                    if r <= 0.0 { Rgba::TRANSPARENT } else { lit(c, 1.0 - (d / r).powi(2)) }
+                });
+            }
+            Generator::Burst { color, per_beat } => {
+                let c = color.resolve(palette);
+                let ph = (beat * per_beat.max(0.05) as f64).fract() as f32;
+                let r = ph * 0.75;
+                frame.fill_with(|u, v| {
+                    let d = ((u - 0.5).powi(2) + (v - 0.5).powi(2)).sqrt();
+                    lit(c, (1.0 - (d - r).abs() / 0.08) * (1.0 - ph))
+                });
+            }
+            Generator::Checker { color, beats } => {
+                let c = color.resolve(palette);
+                let flip = ((beat / beats.max(0.1) as f64).floor() as i64).rem_euclid(2) as usize;
+                frame.fill_with(|u, v| {
+                    let cell = ((u * 4.0) as usize + (v * 4.0) as usize) % 2;
+                    if cell == flip { lit(c, 1.0) } else { Rgba::TRANSPARENT }
                 });
             }
             Generator::Bands => {
@@ -403,5 +459,67 @@ mod tests {
         assert_eq!(f.get(1, 9).a, 1.0);
         assert_eq!(f.get(1, 2).a, 0.0);
         assert_eq!(f.get(0, 9).a, 0.0);
+    }
+
+    fn on(g: &Generator, beat: f64, audio: &AudioBands, u: usize, v: usize, n: usize) -> f32 {
+        let mut f = Frame::transparent(n, n);
+        g.render(&mut f, beat, audio, &P);
+        f.pixels[v * n + u].a
+    }
+
+    #[test]
+    fn breathe_rises_and_falls_once_per_cycle() {
+        let g = Generator::Breathe { color: Paint::Slot(0), beats: 8.0 };
+        let a = AudioBands::default();
+        assert!(on(&g, 0.0, &a, 0, 0, 2) < 0.05);
+        assert!(on(&g, 4.0, &a, 0, 0, 2) > 0.95);
+        assert!(on(&g, 8.0, &a, 0, 0, 2) < 0.05);
+    }
+
+    #[test]
+    fn throb_follows_the_bass_not_the_kick() {
+        let g = Generator::Throb { color: Paint::Slot(0) };
+        let mut a = AudioBands::default();
+        assert_eq!(on(&g, 0.0, &a, 0, 0, 2), 0.0);
+        a.set(AudioBand::Bass, 0.6);
+        assert!((on(&g, 0.0, &a, 0, 0, 2) - 0.6).abs() < 1e-6);
+        a.set(AudioBand::Bass, 0.0);
+        a.set(AudioBand::Kick, 1.0);
+        assert_eq!(on(&g, 0.0, &a, 0, 0, 2), 0.0);
+    }
+
+    #[test]
+    fn bloom_grows_from_the_middle_with_the_bass() {
+        let g = Generator::Grow { color: Paint::Slot(0) };
+        let mut a = AudioBands::default();
+        assert_eq!(on(&g, 0.0, &a, 4, 4, 9), 0.0, "silent: nothing");
+        a.set(AudioBand::Bass, 0.3);
+        let small = (on(&g, 0.0, &a, 4, 4, 9) > 0.0, on(&g, 0.0, &a, 0, 4, 9) > 0.0);
+        assert_eq!(small, (true, false), "a little bass lights only the middle");
+        a.set(AudioBand::Bass, 1.0);
+        assert!(on(&g, 0.0, &a, 1, 4, 9) > 0.0, "loud bass reaches further out");
+    }
+
+    #[test]
+    fn a_burst_ring_leaves_the_middle_every_beat() {
+        let g = Generator::Burst { color: Paint::Slot(0), per_beat: 1.0 };
+        let a = AudioBands::default();
+        // Early in the beat the ring is close to the middle (pixel 23 of 41), not yet at the top edge.
+        assert!(on(&g, 0.1, &a, 23, 20, 41) > 0.3);
+        assert_eq!(on(&g, 0.1, &a, 20, 0, 41), 0.0);
+        // Later it has reached the top edge, and left the middle.
+        assert!(on(&g, 0.7, &a, 20, 0, 41) > 0.0);
+        assert_eq!(on(&g, 0.7, &a, 23, 20, 41), 0.0);
+        // And it restarts on the next beat.
+        assert!(on(&g, 1.1, &a, 23, 20, 41) > 0.3);
+    }
+
+    #[test]
+    fn the_checkerboard_swaps_its_colours() {
+        let g = Generator::Checker { color: Paint::Slot(0), beats: 1.0 };
+        let a = AudioBands::default();
+        let (first, other) = (on(&g, 0.2, &a, 0, 0, 8), on(&g, 0.2, &a, 2, 0, 8));
+        assert!(first != other, "neighbouring cells differ");
+        assert_eq!(on(&g, 1.2, &a, 0, 0, 8), other, "and swap on the next beat");
     }
 }

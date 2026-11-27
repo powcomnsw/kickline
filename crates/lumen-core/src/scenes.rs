@@ -28,6 +28,9 @@ pub fn catalog() -> Vec<(&'static str, &'static str, Vec<Generator>)> {
             Generator::Wipe { color: c, beats: 4.0 },
             Generator::Radar { color: c, beats_per_turn: 4.0, tail: 0.3 },
             Generator::Chase { color: c, width: 0.25, beats_per_cycle: 2.0 },
+            Generator::Burst { color: c, per_beat: 1.0 },
+            Generator::Checker { color: c, beats: 1.0 },
+            Generator::Grow { color: c },
         ]),
         ("On the beat", "Flashes timed to the beat or the drums", vec![
             Generator::BeatPulse { color: c, per_beat: 1.0, fade: 0.6 },
@@ -42,6 +45,8 @@ pub fn catalog() -> Vec<(&'static str, &'static str, Vec<Generator>)> {
             Generator::PaletteWash { beats_per_cycle: 16.0 },
             Generator::Rainbow { scale: 1.0, beats_per_cycle: 8.0 },
             Generator::Plasma { scale: 1.0, speed: 1.0 },
+            Generator::Breathe { color: c, beats: 8.0 },
+            Generator::Throb { color: c },
         ]),
     ]
 }
@@ -134,6 +139,11 @@ pub fn tags_for(name: &str) -> Tags {
         "Dashes" => t(Motion, 0.4, 0.9, "GBD", false),
         "Kick alternate" => t(Accent, 0.5, 1.0, "GD", false),
         "Wave across strips" => t(Motion, 0.3, 0.9, "GMBD", false),
+        "Burst" => t(Motion, 0.4, 1.0, "GBD", false),
+        "Checker swap" => t(Motion, 0.3, 0.9, "GBD", false),
+        "Bass bloom" => t(Motion, 0.3, 1.0, "GMD", false),
+        "Breathe" => t(Wash, 0.0, 0.6, "MPG", false),
+        "Bass throb" => t(Wash, 0.3, 1.0, "GD", false),
         "Solid" => t(Wash, 0.0, 0.5, "MG", false),
         "Palette wash" => t(Wash, 0.0, 0.8, "GMB", false),
         "Rainbow" => t(Wash, 0.3, 0.9, "GD", false),
@@ -191,7 +201,7 @@ mod tests {
             assert!(known(&s.name), "{} has no tags", s.name);
             assert!(s.tags.energy.0 <= s.tags.energy.1);
         }
-        assert_eq!(bank().len(), 26);
+        assert_eq!(bank().len(), 31);
     }
 
     #[test]

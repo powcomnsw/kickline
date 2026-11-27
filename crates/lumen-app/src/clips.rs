@@ -728,6 +728,14 @@ fn gen_edit(ui: &mut egui::Ui, id: (usize, usize), g: &mut Generator) {
             ui.add(egui::Slider::new(density, 0.05..=1.0).text("how many"));
             ui.add(egui::Slider::new(per_beat, 0.25..=8.0).text("changes per beat"));
         }
+        Generator::Breathe { beats: b, .. } => beats(ui, b, "beats per breath"),
+        Generator::Checker { beats: b, .. } => beats(ui, b, "beats between swaps"),
+        Generator::Burst { per_beat, .. } => {
+            ui.add(egui::Slider::new(per_beat, 0.25..=4.0).text("rings per beat"));
+        }
+        Generator::Throb { .. } | Generator::Grow { .. } => {
+            ui.label("Follows the bass.");
+        }
     }
 }
 
