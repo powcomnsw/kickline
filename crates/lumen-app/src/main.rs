@@ -5,6 +5,7 @@ mod clips;
 mod diagnostics;
 mod dmx_monitor;
 mod engine;
+mod example_stages;
 mod fixture_editor;
 mod guide;
 mod link;
@@ -872,6 +873,10 @@ fn apply_args(app: &mut LumenApp, args: &[String]) {
             }
         } else if let Some(s) = arg.strip_prefix("--export-report-after=") {
             v.s.export_after = s.parse().ok();
+        } else if arg == "--example-face" {
+            project::new_show_from(&mut v, "Face stage", example_stages::face_show());
+        } else if arg == "--example-dragon" {
+            project::new_show_from(&mut v, "Dragon stage", example_stages::dragon_show());
         } else if arg == "--example-stage" {
             project::new_show_from(&mut v, "DJ stage", stage::example_show());
         } else if let Some(p) = arg.strip_prefix("--page=") {

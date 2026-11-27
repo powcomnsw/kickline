@@ -314,10 +314,13 @@ mod tests {
                 snake: false,
                 reverse: false,
                 universe_offset: 0,
+                path_order: 0,
+                path_reverse: false,
                 white: Default::default(),
                 groups: Vec::new(),
             }],
             groups: Vec::new(),
+            roles: Default::default(),
         };
         o.render_dmx(frame)[&(0, 0)][..n].to_vec()
     }

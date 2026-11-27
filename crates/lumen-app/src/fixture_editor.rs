@@ -526,6 +526,8 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
                         snake: false,
                         reverse: false,
                         universe_offset: 0,
+                        path_order: 0,
+                        path_reverse: false,
                         white: Default::default(),
                         groups: Vec::new(),
                     });

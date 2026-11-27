@@ -101,6 +101,18 @@ pub fn effect_needs_beat(effect: &str) -> bool {
     !matches!(effect, "Solid" | "Palette wash" | "Rainbow" | "Plasma" | "Twinkle" | "Bands" | "Bass meter" | "Hi-hat sparkle" | "Kick flash" | "Kick burst" | "Kick alternate" | "Snare segments")
 }
 
+/// Which stage role an effect was written for: travelling effects run on a
+/// path, sweeps between halves on a pair, and the rest in the middle.
+pub fn lead_for(effect: &str) -> crate::roles::StageRole {
+    use crate::roles::StageRole::*;
+    match effect {
+        "Meteor" | "Meteor bounce" | "Dashes" | "Chase" | "Fill to the bar" | "Wave across strips" => Path,
+        "Left ↔ right" | "Sweep in" | "Sweep out" | "Wipe" => Left,
+        "Radar" | "Up ↕ down" | "Bass meter" | "Bands" => Centre,
+        _ => Fill,
+    }
+}
+
 const fn look(id: &'static str, section: Section, wash: Option<Move>, motion: Option<Move>, accent: Option<Move>) -> Look {
     Look { id, section, wash, motion, accent }
 }

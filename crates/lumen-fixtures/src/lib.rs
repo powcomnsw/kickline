@@ -367,9 +367,19 @@ pub struct Fixture {
     /// How RGBW fixtures use their white emitter.
     #[serde(default)]
     pub white: WhiteMode,
+    /// Place along a Path (1 = first). 0 means "by position on the stage".
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub path_order: u16,
+    /// This fixture runs backwards along its Path.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub path_reverse: bool,
     /// Groups ("slices") this fixture is in, e.g. "Left panel", "Triangle".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<String>,
+}
+
+fn is_zero(v: &u16) -> bool {
+    *v == 0
 }
 
 /// How a fixture with a white emitter makes white.
@@ -422,6 +432,10 @@ impl Fixture {
     pub fn contains(&self, aspect: f32, u: f32, v: f32) -> bool {
         let (lx, ly) = self.to_local(aspect, u, v);
         lx.abs() <= 0.5 && ly.abs() <= 0.5
+    }
+
+    pub fn pos(&self) -> (f32, f32) {
+        (self.x, self.y)
     }
 
     pub fn corners(&self, aspect: f32) -> [(f32, f32); 4] {
@@ -497,11 +511,14 @@ pub struct AdvancedOutput {
     /// Group names in display order (fixtures carry their own tags too).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<String>,
+    /// What each group is for (Auto plays looks written for these roles).
+    #[serde(default, skip_serializing_if = "lumen_core::RoleMap::is_empty")]
+    pub roles: lumen_core::RoleMap,
 }
 
 impl Default for AdvancedOutput {
     fn default() -> Self {
-        AdvancedOutput { aspect: default_aspect(), lumiverses: Vec::new(), types: Vec::new(), fixtures: Vec::new(), groups: Vec::new() }
+        AdvancedOutput { aspect: default_aspect(), lumiverses: Vec::new(), types: Vec::new(), fixtures: Vec::new(), groups: Vec::new(), roles: Default::default() }
     }
 }
 
@@ -526,6 +543,8 @@ impl AdvancedOutput {
             snake: false,
             reverse: false,
             universe_offset: 0,
+            path_order: 0,
+            path_reverse: false,
             white: Default::default(),
             groups: Vec::new(),
         };
@@ -545,6 +564,8 @@ impl AdvancedOutput {
                 snake: false,
                 reverse: false,
                 universe_offset: 0,
+                path_order: 0,
+                path_reverse: false,
                 white: Default::default(),
                 groups: Vec::new(),
             });
@@ -562,6 +583,8 @@ impl AdvancedOutput {
             snake: true,
             reverse: false,
             universe_offset: 0,
+            path_order: 0,
+            path_reverse: false,
             white: Default::default(),
             groups: Vec::new(),
         });
@@ -854,9 +877,73 @@ impl AdvancedOutput {
         let mut m: Vec<usize> = (0..self.fixtures.len()).filter(|&i| self.fixtures[i].groups.iter().any(|g| g == group)).collect();
         m.sort_by(|&a, &b| {
             let (fa, fb) = (&self.fixtures[a], &self.fixtures[b]);
-            fa.x.total_cmp(&fb.x).then(fa.y.total_cmp(&fb.y))
+            // Fixtures with a path place come first, in that order; the rest by position.
+            let (oa, ob) = ((fa.path_order == 0) as u8, (fb.path_order == 0) as u8);
+            oa.cmp(&ob).then(fa.path_order.cmp(&fb.path_order)).then(fa.x.total_cmp(&fb.x)).then(fa.y.total_cmp(&fb.y))
         });
         m
+    }
+
+    /// A guess at each group's role from the layout. A starting point for the
+    /// user to correct; it is never applied by itself. Groups that only repeat
+    /// other groups ("Panels" over "Left panel" and "Right panel") get none.
+    pub fn suggest_roles(&self) -> lumen_core::RoleMap {
+        use lumen_core::StageRole as R;
+        let names = self.group_names();
+        let sets: Vec<Vec<usize>> = names.iter().map(|g| (0..self.fixtures.len()).filter(|&i| self.fixtures[i].groups.iter().any(|x| x == g)).collect()).collect();
+        let keep: Vec<bool> = (0..names.len())
+            .map(|a| {
+                !sets[a].is_empty()
+                    && !(0..names.len()).any(|b| {
+                        b != a && !sets[b].is_empty() && sets[b].iter().all(|i| sets[a].contains(i)) && (sets[b].len() < sets[a].len() || (sets[b].len() == sets[a].len() && b < a))
+                    })
+            })
+            .collect();
+        let is_line = |i: usize| self.types.get(self.fixtures[i].type_id).is_some_and(|t| t.pixel_count() >= 2 && (t.columns <= 1 || t.rows <= 1));
+        let centroid = |set: &[usize]| {
+            let n = set.len() as f32;
+            (set.iter().map(|&i| self.fixtures[i].x).sum::<f32>() / n, set.iter().map(|&i| self.fixtures[i].y).sum::<f32>() / n)
+        };
+        let small = |set: &[usize]| set.iter().all(|&i| self.fixtures[i].w * self.fixtures[i].h < 0.012);
+        let mirrored = |a: (f32, f32), b: (f32, f32)| (a.0 + b.0 - 1.0).abs() < 0.1 && (a.1 - b.1).abs() < 0.12 && (a.0 - b.0).abs() > 0.1;
+        let mut out = lumen_core::RoleMap::default();
+        for a in 0..names.len() {
+            if !keep[a] {
+                continue;
+            }
+            let set = &sets[a];
+            let role = if set.iter().all(|&i| is_line(i)) {
+                // Strips: a closed loop is an outline, an open chain a path.
+                let ends: Vec<(f32, f32)> = set
+                    .iter()
+                    .flat_map(|&i| {
+                        let f = &self.fixtures[i];
+                        [f.to_canvas(self.aspect, -0.5, 0.0), f.to_canvas(self.aspect, 0.5, 0.0)]
+                    })
+                    .map(|(u, v)| (u * self.aspect, v))
+                    .collect();
+                let touching = |k: usize| ends.iter().enumerate().any(|(j, e)| j / 2 != k / 2 && ((e.0 - ends[k].0).powi(2) + (e.1 - ends[k].1).powi(2)).sqrt() < 0.06);
+                if set.len() >= 3 && (0..ends.len()).all(touching) {
+                    R::Outline
+                } else {
+                    R::Path
+                }
+            } else {
+                let c = centroid(set);
+                let partner = |only_small: bool| (0..names.len()).any(|b| b != a && keep[b] && (!only_small || small(&sets[b])) && !sets[b].iter().all(|&i| is_line(i)) && mirrored(c, centroid(&sets[b])));
+                if small(set) && ((set.len() == 2 && mirrored(self.fixtures[set[0]].pos(), self.fixtures[set[1]].pos())) || partner(true)) {
+                    R::Eyes
+                } else if partner(false) && (c.0 - 0.5).abs() > 0.05 {
+                    if c.0 < 0.5 { R::Left } else { R::Right }
+                } else if (c.0 - 0.5).abs() < 0.15 && (c.1 - 0.5).abs() < 0.3 {
+                    R::Centre
+                } else {
+                    R::Fill
+                }
+            };
+            out.set(&names[a], Some(role));
+        }
+        out
     }
 
     /// The part of the canvas a group covers (x0, y0, x1, y1).
@@ -873,6 +960,11 @@ impl AdvancedOutput {
     }
 
     pub fn rename_group(&mut self, from: &str, to: &str) {
+        for (g, _) in self.roles.0.iter_mut() {
+            if g == from {
+                *g = to.to_string();
+            }
+        }
         for g in self.groups.iter_mut().chain(self.fixtures.iter_mut().flat_map(|f| f.groups.iter_mut())) {
             if g == from {
                 *g = to.to_string();
@@ -881,6 +973,7 @@ impl AdvancedOutput {
     }
 
     pub fn remove_group(&mut self, name: &str) {
+        self.roles.set(name, None);
         self.groups.retain(|g| g != name);
         for f in &mut self.fixtures {
             f.groups.retain(|g| g != name);
@@ -944,6 +1037,8 @@ impl AdvancedOutput {
                 snake: false,
                 reverse: false,
                 universe_offset: out as u16 * s.universes_per_output,
+                path_order: 0,
+                path_reverse: false,
                 white: WhiteMode::default(),
                 groups: vec![s.name.clone()],
             });
@@ -991,6 +1086,8 @@ impl AdvancedOutput {
                 snake: false,
                 reverse: spec.zigzag && i % 2 == 1,
                 universe_offset: uni,
+                path_order: 0,
+                path_reverse: false,
                 white: WhiteMode::default(),
                 groups: Vec::new(),
             };
@@ -1189,7 +1286,7 @@ mod tests {
     use super::*;
 
     fn one(t: FixtureType, fx: Fixture) -> AdvancedOutput {
-        AdvancedOutput { aspect: 1.0, lumiverses: vec![Lumiverse::new("L", 3)], types: vec![t], fixtures: vec![fx], groups: Vec::new() }
+        AdvancedOutput { aspect: 1.0, lumiverses: vec![Lumiverse::new("L", 3)], types: vec![t], fixtures: vec![fx], groups: Vec::new(), roles: Default::default() }
     }
 
     fn fx(address: u16) -> Fixture {
@@ -1206,6 +1303,8 @@ mod tests {
             snake: false,
             reverse: false,
             universe_offset: 0,
+            path_order: 0,
+            path_reverse: false,
             white: Default::default(),
             groups: Vec::new(),
         }
@@ -1343,6 +1442,7 @@ mod tests {
             types: vec![FixtureType::new("strip", n_px, 1, "RGB")],
             fixtures: vec![],
             groups: Vec::new(),
+            roles: Default::default(),
         }
     }
 
@@ -1533,5 +1633,128 @@ mod tests {
         let back: AdvancedOutput = serde_json::from_str(&s).unwrap();
         assert_eq!(back.fixtures, o.fixtures);
         assert_eq!(back.types, o.types);
+    }
+
+    // ---- Stage roles
+
+    /// A strip from (x0,y0) to (x1,y1) on a 16:9 canvas, one group per `groups`.
+    fn bar(o: &mut AdvancedOutput, name: &str, a: (f32, f32), b: (f32, f32), groups: &[&str]) {
+        if o.types.is_empty() {
+            o.types.push(FixtureType::new("Pixel strip 30 RGB", 30, 1, "RGB"));
+            o.lumiverses.push(Lumiverse::new("C", 0));
+        }
+        let asp = o.aspect;
+        let (dx, dy) = ((b.0 - a.0) * asp, b.1 - a.1);
+        let mut f = fx(1);
+        f.name = name.into();
+        f.x = (a.0 + b.0) / 2.0;
+        f.y = (a.1 + b.1) / 2.0;
+        f.w = (dx * dx + dy * dy).sqrt() / asp;
+        f.h = 0.02;
+        f.rotation = dy.atan2(dx).to_degrees();
+        f.groups = groups.iter().map(|g| g.to_string()).collect();
+        o.fixtures.push(f);
+    }
+
+    fn panel(o: &mut AdvancedOutput, name: &str, x: f32, y: f32, w: f32, h: f32, groups: &[&str]) {
+        let t = o.types.iter().position(|t| t.name == "Panel 8x8").unwrap_or_else(|| {
+            o.types.push(FixtureType::new("Panel 8x8", 8, 8, "RGB"));
+            o.types.len() - 1
+        });
+        if o.lumiverses.is_empty() {
+            o.lumiverses.push(Lumiverse::new("C", 0));
+        }
+        let mut f = fx(1);
+        f.name = name.into();
+        f.type_id = t;
+        f.x = x;
+        f.y = y;
+        f.w = w;
+        f.h = h;
+        f.groups = groups.iter().map(|g| g.to_string()).collect();
+        o.fixtures.push(f);
+    }
+
+    #[test]
+    fn a_path_runs_in_its_own_order_not_left_to_right() {
+        let mut o = AdvancedOutput { aspect: 16.0 / 9.0, ..Default::default() };
+        bar(&mut o, "a", (0.1, 0.5), (0.2, 0.5), &["Spine"]);
+        bar(&mut o, "b", (0.3, 0.5), (0.4, 0.5), &["Spine"]);
+        bar(&mut o, "c", (0.5, 0.5), (0.6, 0.5), &["Spine"]);
+        assert_eq!(o.group_members("Spine"), vec![0, 1, 2]);
+        o.fixtures[0].path_order = 3;
+        o.fixtures[1].path_order = 1;
+        o.fixtures[2].path_order = 2;
+        assert_eq!(o.group_members("Spine"), vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn a_show_from_before_roles_still_opens() {
+        let o = AdvancedOutput::demo();
+        let mut v: serde_json::Value = serde_json::to_value(&o).unwrap();
+        v.as_object_mut().unwrap().remove("roles");
+        for f in v["fixtures"].as_array_mut().unwrap() {
+            f.as_object_mut().unwrap().remove("path_order");
+            f.as_object_mut().unwrap().remove("path_reverse");
+        }
+        let back: AdvancedOutput = serde_json::from_value(v).unwrap();
+        assert!(back.roles.is_empty());
+        assert!(back.fixtures.iter().all(|f| f.path_order == 0 && !f.path_reverse));
+    }
+
+    #[test]
+    fn suggestions_read_the_layout() {
+        use lumen_core::StageRole::*;
+        let mut o = AdvancedOutput { aspect: 16.0 / 9.0, ..Default::default() };
+        // An open chain of strips: a Path.
+        bar(&mut o, "s1", (0.10, 0.9), (0.20, 0.9), &["Tail", "Body"]);
+        bar(&mut o, "s2", (0.20, 0.9), (0.30, 0.8), &["Tail", "Body"]);
+        bar(&mut o, "s3", (0.30, 0.8), (0.40, 0.8), &["Tail", "Body"]);
+        // A closed triangle: an Outline.
+        bar(&mut o, "t1", (0.6, 0.2), (0.7, 0.2), &["Ring"]);
+        bar(&mut o, "t2", (0.7, 0.2), (0.65, 0.3), &["Ring"]);
+        bar(&mut o, "t3", (0.65, 0.3), (0.6, 0.2), &["Ring"]);
+        // A small matched pair: Eyes.
+        panel(&mut o, "e1", 0.42, 0.3, 0.05, 0.08, &["Eye A"]);
+        panel(&mut o, "e2", 0.58, 0.3, 0.05, 0.08, &["Eye B"]);
+        // Big panels either side: a left/right pair. One in the middle: Centre.
+        panel(&mut o, "pl", 0.1, 0.4, 0.12, 0.5, &["Panel L"]);
+        panel(&mut o, "pr", 0.9, 0.4, 0.12, 0.5, &["Panel R"]);
+        panel(&mut o, "pc", 0.5, 0.5, 0.2, 0.2, &["Core"]);
+        o.groups = o.group_names();
+        let r = o.suggest_roles();
+        assert_eq!(r.get("Tail"), Some(Path));
+        assert_eq!(r.get("Ring"), Some(Outline));
+        assert_eq!(r.get("Panel L"), Some(Left));
+        assert_eq!(r.get("Panel R"), Some(Right));
+        assert_eq!(r.get("Core"), Some(Centre));
+        assert!(matches!(r.get("Eye A"), Some(Eyes)) && matches!(r.get("Eye B"), Some(Eyes)));
+        // A group that only repeats others ("Body" = Tail) gets no role of its own.
+        assert_eq!(r.get("Body"), None);
+    }
+
+    #[test]
+    fn a_stage_without_groups_gets_no_suggestions() {
+        let mut o = AdvancedOutput { aspect: 16.0 / 9.0, ..Default::default() };
+        bar(&mut o, "x", (0.1, 0.5), (0.2, 0.5), &[]);
+        assert!(o.suggest_roles().is_empty());
+    }
+
+    #[test]
+    fn suggestions_are_repeatable() {
+        let o = AdvancedOutput::demo();
+        assert_eq!(o.suggest_roles(), o.suggest_roles());
+    }
+
+    #[test]
+    fn roles_follow_a_renamed_group_and_go_with_a_deleted_one() {
+        let mut o = AdvancedOutput::demo();
+        o.fixtures[0].groups = vec!["Left".into()];
+        o.roles.set("Left", Some(lumen_core::StageRole::Fill));
+        o.rename_group("Left", "Side");
+        assert_eq!(o.roles.get("Side"), Some(lumen_core::StageRole::Fill));
+        assert_eq!(o.roles.get("Left"), None);
+        o.remove_group("Side");
+        assert!(o.roles.is_empty());
     }
 }

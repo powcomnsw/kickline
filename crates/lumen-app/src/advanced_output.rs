@@ -502,6 +502,8 @@ fn lumiverse_panel(
                 snake: t.rows > 1,
                 reverse: false,
                 universe_offset: o.next_free_slot(st.lumiverse).0,
+                path_order: 0,
+                path_reverse: false,
                 white: Default::default(),
                 groups: Vec::new(),
             };

@@ -109,6 +109,9 @@ pub struct Composition {
     /// Groups in the show, for Auto's per-group motion (set by the engine).
     #[serde(skip)]
     pub auto_groups: Vec<String>,
+    /// What each group is for (set by the engine from the stage).
+    #[serde(skip)]
+    pub auto_roles: crate::roles::RoleMap,
     /// Brightness from the current section's look (1 when looks are off).
     #[serde(skip, default = "one")]
     pub look_level: f32,
@@ -152,6 +155,7 @@ impl Composition {
             auto: Vec::new(),
             director_rt: Director::default(),
             auto_groups: Vec::new(),
+            auto_roles: Default::default(),
             look_level: 1.0,
             beat: 0.0,
             analysis_beat: 0.0,
@@ -186,6 +190,7 @@ impl Composition {
         new.auto = std::mem::take(&mut self.auto);
         new.director_rt = std::mem::take(&mut self.director_rt);
         new.auto_groups = std::mem::take(&mut self.auto_groups);
+        new.auto_roles = std::mem::take(&mut self.auto_roles);
         new.look_level = self.look_level;
         *self = new;
     }
@@ -341,6 +346,7 @@ impl Composition {
             phrase: self.phrase,
             steady: self.steady,
             drops: self.memory.drops,
+            roles: &self.auto_roles,
         };
         self.director_rt.step(&self.director, &input, &mut self.auto, &mut self.palettes);
     }

@@ -399,6 +399,8 @@ fn lights(v: &mut View, ui: &mut egui::Ui) {
                     snake: g.snake,
                     reverse: false,
                     universe_offset,
+                    path_order: 0,
+                    path_reverse: false,
                     white: Default::default(),
                     groups: Vec::new(),
                 });

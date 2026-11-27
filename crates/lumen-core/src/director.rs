@@ -167,6 +167,8 @@ pub struct Input<'a> {
     pub steady: bool,
     /// Drops heard so far in this track (the second drop looks different).
     pub drops: u32,
+    /// What each group is for.
+    pub roles: &'a crate::roles::RoleMap,
 }
 
 #[derive(Clone, Debug)]
@@ -369,6 +371,10 @@ impl Director {
                     l.clips[0] = Some(Clip::new(m.effect, g));
                     l.active = Some(0);
                     l.trigger_beat = beat;
+                    // The right half of a pair answers the left, half a cycle behind.
+                    if role == Role::Motion && sl.group.as_ref().is_some_and(|g| inp.roles.get(g) == Some(crate::roles::StageRole::Right)) {
+                        l.trigger_beat = beat - 2.0;
+                    }
                     sl.name = m.effect.to_string();
                 }
                 None => {
@@ -384,6 +390,34 @@ impl Director {
             sl.fade = 0.0;
             sl.fade_beats = if instant { 0.25 } else { role_fade(role) };
             sl.last_pick = beat;
+        }
+    }
+
+    /// How strongly a slot plays given the stage's roles: motion leads on the
+    /// role its effect was written for and supports softly elsewhere; accents
+    /// gather on the eyes. Without roles every slot plays fully.
+    fn support_gain(&self, sl: &Slot, inp: &Input) -> f32 {
+        use crate::roles::StageRole;
+        let roles = inp.roles;
+        match sl.role {
+            Role::Motion => {
+                let (Some(g), Some(m)) = (&sl.group, self.look.and_then(|l| l.motion)) else { return 1.0 };
+                if roles.is_empty() {
+                    return 1.0;
+                }
+                let lead = playbook::lead_for(m.effect);
+                let mut set = roles.groups_for(lead, inp.groups);
+                if lead == StageRole::Left {
+                    set.extend(roles.groups_for(StageRole::Right, inp.groups));
+                }
+                if set.is_empty() || set.contains(g) {
+                    1.0
+                } else {
+                    0.4
+                }
+            }
+            Role::Accent if sl.group.is_none() && roles.has(StageRole::Eyes, inp.groups) => 0.6,
+            _ => 1.0,
         }
     }
 
@@ -428,6 +462,10 @@ impl Director {
         } else {
             for g in groups {
                 wanted.push((Role::Motion, Some(g.clone())));
+            }
+            // Focal points get an accent of their own.
+            for g in inp.roles.direct(crate::roles::StageRole::Eyes, inp.groups).into_iter().filter(|g| !s.off_groups.contains(g)) {
+                wanted.push((Role::Accent, Some(g)));
             }
         }
         let same = self.slots.len() == wanted.len() && self.slots.iter().zip(&wanted).all(|(a, b)| a.role == b.0 && a.group == b.1);
@@ -526,7 +564,8 @@ impl Director {
         // Levels and the crossfade.
         for si in 0..self.slots.len() {
             let sl0 = &self.slots[si];
-            let mut level = self.energy.powf(0.8) * role_gain(sl0.role) * self.duck * sl0.move_level * sl0.ramp.level_at(progress);
+            let support = self.support_gain(sl0, inp);
+            let mut level = self.energy.powf(0.8) * role_gain(sl0.role) * self.duck * sl0.move_level * sl0.ramp.level_at(progress) * support;
             if beat < self.impact_until {
                 // The impact: everything hits hard, easing down over the bar.
                 let k = ((self.impact_until - beat) / bar_beats as f64).clamp(0.0, 1.0) as f32;
@@ -579,13 +618,14 @@ mod tests {
         phrase: crate::set::Phrase,
         steady: bool,
         drops: u32,
+        roles: crate::roles::RoleMap,
     }
 
     impl Rig {
         fn new() -> Self {
             let mut d = Director::default();
             d.seed(7);
-            Rig { d, s: DirectorSettings { on: true, ..Default::default() }, auto: Vec::new(), pal: Palettes::default(), audio: AudioBands::default(), beat: 0.0, groups: Vec::new(), user: false, phrase: Default::default(), steady: true, drops: 0 }
+            Rig { d, s: DirectorSettings { on: true, ..Default::default() }, auto: Vec::new(), pal: Palettes::default(), audio: AudioBands::default(), beat: 0.0, groups: Vec::new(), user: false, phrase: Default::default(), steady: true, drops: 0, roles: Default::default() }
         }
 
         /// Play `beats` beats of a section (20 steps a beat). Returns the effect names seen.
@@ -594,7 +634,7 @@ mod tests {
             for b in 0..beats * 20 {
                 self.audio.set(AudioBand::Level, 0.7);
                 self.phrase.update(self.beat, None, 4);
-                let inp = Input { audio: &self.audio, beat: self.beat, section, beats_in: b / 20, groups: &self.groups, user_playing: self.user, phrase: self.phrase, steady: self.steady, drops: self.drops };
+                let inp = Input { audio: &self.audio, beat: self.beat, section, beats_in: b / 20, groups: &self.groups, user_playing: self.user, phrase: self.phrase, steady: self.steady, drops: self.drops, roles: &self.roles };
                 self.d.step(&self.s, &inp, &mut self.auto, &mut self.pal);
                 for (_, n) in &self.d.now {
                     if !n.is_empty() && !seen.contains(n) {
@@ -854,7 +894,7 @@ mod tests {
     fn self_step(r: &mut Rig, section: Section, beats_in: u32) {
         r.audio.set(AudioBand::Level, 0.7);
         r.phrase.update(r.beat, None, 4);
-        let inp = Input { audio: &r.audio, beat: r.beat, section, beats_in, groups: &r.groups, user_playing: r.user, phrase: r.phrase, steady: r.steady, drops: r.drops };
+        let inp = Input { audio: &r.audio, beat: r.beat, section, beats_in, groups: &r.groups, user_playing: r.user, phrase: r.phrase, steady: r.steady, drops: r.drops, roles: &r.roles };
         r.d.step(&r.s, &inp, &mut r.auto, &mut r.pal);
         r.beat += 0.05;
     }
@@ -938,5 +978,66 @@ mod tests {
             }
         };
         assert_ne!(slot_of(1), slot_of(2));
+    }
+
+    fn level_of(r: &Rig, group: &str, role: Role) -> f32 {
+        let i = r.d.slots.iter().position(|s| s.role == role && s.group.as_deref() == Some(group)).expect("slot");
+        let sl = &r.d.slots[i];
+        r.auto[i * 2 + sl.cur].opacity
+    }
+
+    #[test]
+    fn motion_leads_on_the_role_it_was_written_for() {
+        use crate::roles::StageRole;
+        let mut r = Rig::new();
+        r.groups = vec!["Edge".into(), "Panels".into()];
+        r.roles.set("Edge", Some(StageRole::Path));
+        r.roles.set("Panels", Some(StageRole::Fill));
+        r.s.off_looks = crate::playbook::looks_for(Section::Groove).filter(|l| l.id != "groove-meteors").map(|l| l.id.to_string()).collect();
+        r.play(Section::Groove, 8);
+        assert_eq!(r.d.look_name, "groove-meteors");
+        let (edge, panels) = (level_of(&r, "Edge", Role::Motion), level_of(&r, "Panels", Role::Motion));
+        assert!(edge > panels * 1.5, "meteors run on the path: {edge} vs {panels}");
+        assert!(panels > 0.0, "the panels still play, softly");
+    }
+
+    #[test]
+    fn without_roles_every_group_plays_the_motion_fully() {
+        let mut r = Rig::new();
+        r.groups = vec!["A".into(), "B".into()];
+        r.s.off_looks = crate::playbook::looks_for(Section::Groove).filter(|l| l.id != "groove-meteors").map(|l| l.id.to_string()).collect();
+        r.play(Section::Groove, 8);
+        assert_eq!(level_of(&r, "A", Role::Motion), level_of(&r, "B", Role::Motion));
+    }
+
+    #[test]
+    fn accents_gather_on_the_eyes_when_the_stage_has_them() {
+        use crate::roles::StageRole;
+        let mut r = Rig::new();
+        r.groups = vec!["Eye L".into(), "Eye R".into(), "Face".into()];
+        r.roles.set("Eye L", Some(StageRole::Eyes));
+        r.roles.set("Eye R", Some(StageRole::Eyes));
+        r.play(Section::Groove, 8);
+        let global = r.d.slots.iter().position(|s| s.role == Role::Accent && s.group.is_none()).unwrap();
+        let global_op = r.auto[global * 2 + r.d.slots[global].cur].opacity;
+        assert!(level_of(&r, "Eye L", Role::Accent) > global_op, "eyes get the full accent");
+        assert!(r.d.slots.iter().filter(|s| s.role == Role::Accent && s.group.is_some()).count() == 2);
+    }
+
+    #[test]
+    fn the_right_half_of_a_pair_answers_the_left() {
+        use crate::roles::StageRole;
+        let mut r = Rig::new();
+        r.groups = vec!["L".into(), "R".into()];
+        r.roles.set("L", Some(StageRole::Left));
+        r.roles.set("R", Some(StageRole::Right));
+        r.s.off_looks = crate::playbook::looks_for(Section::Groove).filter(|l| l.id != "groove-sweep").map(|l| l.id.to_string()).collect();
+        r.play(Section::Groove, 2);
+        let t = |g: &str| {
+            let i = r.d.slots.iter().position(|s| s.role == Role::Motion && s.group.as_deref() == Some(g)).unwrap();
+            r.auto[i * 2 + r.d.slots[i].cur].trigger_beat
+        };
+        assert!((t("L") - t("R")).abs() > 1.0, "the right half is half a cycle behind");
+        assert!(level_of(&r, "L", Role::Motion) > 0.0 && level_of(&r, "R", Role::Motion) > 0.0);
     }
 }

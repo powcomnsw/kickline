@@ -12,7 +12,7 @@ use crate::diagnostics::Metrics;
 use crate::link::{LinkStatus, LinkSync};
 use crate::log;
 use lumen_audio::{Analyzer, AudioFeed, DemoBeat, Settings, Wake};
-use lumen_core::{AudioBands, Composition, Frame, Rgba};
+use lumen_core::{AudioBands, Composition, Frame, Rgba, StripPixel};
 use lumen_fixtures::{AdvancedOutput, UNIVERSE_SIZE};
 use lumen_output::{SendStats, Sender};
 use std::collections::BTreeMap;
@@ -236,7 +236,7 @@ impl Engine {
     }
 
     /// One tick of `dt` seconds (the real one, or a made-up one in tests).
-    fn step(&mut self, dt: f64, woke_by_hit: bool, _now: Instant) {
+    pub(crate) fn step(&mut self, dt: f64, woke_by_hit: bool, _now: Instant) {
         self.time_s += dt;
         self.comp.time_s = self.time_s;
 
@@ -313,6 +313,9 @@ impl Engine {
             let groups = self.output.group_names();
             if self.comp.auto_groups != groups {
                 self.comp.auto_groups = groups;
+            }
+            if self.comp.auto_roles != self.output.roles {
+                self.comp.auto_roles = self.output.roles.clone();
             }
         }
         self.update_audio(dt);
@@ -439,6 +442,8 @@ impl Engine {
                 None if stage.is_empty() => sampled,
                 None => {
                     let groups = &fixtures[p.fixture].groups;
+                    // A fixture that runs backwards along its path sees the effect flipped.
+                    let p = if fixtures[p.fixture].path_reverse { StripPixel { x: 1.0 - p.x, ..p } } else { p };
                     stage.shade_in(sampled, p, &|g| {
                         if !groups.iter().any(|x| x == g) {
                             return None;

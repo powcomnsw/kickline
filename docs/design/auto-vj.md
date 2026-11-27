@@ -328,6 +328,15 @@ roles and signature looks, the two new example stages. *Done when:* the
 same playbook renders sensibly on the example stage, the face, the dragon
 and a stage with no roles, checked by tests on which fixtures light.
 
+*Phase 3 status:* built: roles per group with fallbacks (`lumen-core/roles.rs`),
+path order and "runs backwards" on fixtures, layout suggestions the user must
+accept, the role editor, roles saved with the stage profile, the face and
+dragon examples, and tests that every look lights something on every stage
+with and without roles. Not built yet: signature looks per stage. Note the
+lights test cannot fail on a bare stage because the wash covers the rig; the
+Director tests (`motion_leads_on_the_role_it_was_written_for` and friends)
+are what check that roles change where effects go.
+
 **Phase 4: Effects.** The new effects in D, then fill the playbook to
 about ten looks per section. *Done when:* each section has at least ten
 enabled looks with flash-safe off, the Drop list has both strobe looks

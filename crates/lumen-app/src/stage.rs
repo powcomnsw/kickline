@@ -14,6 +14,8 @@ pub struct State {
     pub new_group: String,
     pub renaming: Option<(String, String)>,
     pub message: Option<String>,
+    /// A guess at the roles, waiting for the user to accept or dismiss it.
+    pub suggested: Option<lumen_core::RoleMap>,
 }
 
 /// A stage profile: the rig and how it looks in each part of a song.
@@ -243,6 +245,11 @@ fn groups_list(v: &mut View, ui: &mut egui::Ui, groups: &[String]) {
                 }
             });
         });
+        ui.horizontal(|ui| {
+            ui.add_space(22.0);
+            ui.label(RichText::new("Role").color(t.weak).size(t.text_size - 2.0));
+            role_picker(&mut v.e.output, ui, g);
+        });
     }
     if let Some((from, to)) = rename_done {
         let to = to.trim().to_string();
@@ -265,6 +272,8 @@ fn groups_list(v: &mut View, ui: &mut egui::Ui, groups: &[String]) {
             }
         }
     }
+    ui.add_space(6.0);
+    roles_box(v, ui, groups);
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add(egui::TextEdit::singleline(&mut v.s.stage.new_group).hint_text("New group").desired_width(140.0));
@@ -291,6 +300,81 @@ fn groups_list(v: &mut View, ui: &mut egui::Ui, groups: &[String]) {
                 }
             }
         });
+    }
+}
+
+/// What a group is for, so Auto's looks know where to put what.
+fn role_picker(o: &mut AdvancedOutput, ui: &mut egui::Ui, g: &str) {
+    let cur = o.roles.get(g);
+    let mut pick = cur;
+    egui::ComboBox::from_id_salt(("role", g))
+        .selected_text(cur.map(|r| r.name()).unwrap_or("No role"))
+        .width(86.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut pick, None, "No role");
+            for r in lumen_core::StageRole::ALL {
+                ui.selectable_value(&mut pick, Some(r), r.name()).on_hover_text(r.note());
+            }
+        });
+    if pick != cur {
+        o.roles.set(g, pick);
+    }
+}
+
+/// Suggest roles from the layout (never applied until accepted), and the
+/// order and direction of a Path.
+fn roles_box(v: &mut View, ui: &mut egui::Ui, groups: &[String]) {
+    let t = theme::current();
+    ui.label(RichText::new("Roles tell Auto what each group is for: Eyes get the accents, a Path carries the chases, Left and Right answer each other. With no roles every group plays everything.").color(t.weak).size(t.text_size - 2.0));
+    ui.horizontal(|ui| {
+        if ui.button("Suggest roles").on_hover_text("A guess from where things are. You choose whether to use it.").clicked() {
+            let s = v.e.output.suggest_roles();
+            v.s.stage.message = Some(if s.is_empty() { "Nothing to suggest: add some groups first.".into() } else { String::new() });
+            v.s.stage.suggested = (!s.is_empty()).then_some(s);
+        }
+    });
+    if let Some(s) = v.s.stage.suggested.clone() {
+        ui.add_space(4.0);
+        for (g, r) in &s.0 {
+            ui.label(RichText::new(format!("{g} → {}", r.name())).color(t.weak));
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Use these").clicked() {
+                for g in groups {
+                    v.e.output.roles.set(g, s.get(g));
+                }
+                v.s.stage.suggested = None;
+            }
+            if ui.button("Not now").clicked() {
+                v.s.stage.suggested = None;
+            }
+        });
+    }
+    // The selected group's path order, when it is a Path.
+    if let Some(g) = v.s.stage.group.clone().filter(|g| v.e.output.roles.get(g) == Some(lumen_core::StageRole::Path)) {
+        ui.add_space(6.0);
+        ui.label(RichText::new(format!("{g}: order along the path")).font(theme::bold(t.text_size)));
+        let m = v.e.output.group_members(&g);
+        let mut swap = None;
+        for (k, &fi) in m.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(format!("{}. {}", k + 1, v.e.output.fixtures[fi].name));
+                if ui.add_enabled(k > 0, egui::Button::new("▲").small()).clicked() {
+                    swap = Some((k, k - 1));
+                }
+                if ui.add_enabled(k + 1 < m.len(), egui::Button::new("▼").small()).clicked() {
+                    swap = Some((k, k + 1));
+                }
+                ui.checkbox(&mut v.e.output.fixtures[fi].path_reverse, "runs backwards");
+            });
+        }
+        if let Some((a, b)) = swap {
+            let mut order = m.clone();
+            order.swap(a, b);
+            for (k, fi) in order.into_iter().enumerate() {
+                v.e.output.fixtures[fi].path_order = k as u16 + 1;
+            }
+        }
     }
 }
 
@@ -353,7 +437,7 @@ fn looks_panel(v: &mut View, ui: &mut egui::Ui) {
     ui.add_space(12.0);
     ui.separator();
     ui.label(RichText::new("Stage profile").font(theme::bold(t.text_size + 1.0)));
-    ui.label(RichText::new("Your rig (outputs, fixtures, groups) with its colours and looks, in one file. Load it into any show.").color(t.weak).size(t.text_size - 2.0));
+    ui.label(RichText::new("Your rig (outputs, fixtures, groups, roles and path order) with its colours and looks, in one file. Load it into any show.").color(t.weak).size(t.text_size - 2.0));
     ui.horizontal_wrapped(|ui| {
         if ui.button("Save profile…").clicked() {
             let msg = save_profile(v);
@@ -369,6 +453,16 @@ fn looks_panel(v: &mut View, ui: &mut egui::Ui) {
         project::new_show_from(v, "DJ stage", example_show());
         v.s.stage.message = Some("Opened a new show from the example stage.".into());
     }
+    ui.horizontal(|ui| {
+        if ui.button("Face example").on_hover_text("A head outline, two eyes, brows, a nose and a mouth: tests focal points and a closed outline").clicked() {
+            project::new_show_from(v, "Face stage", crate::example_stages::face_show());
+            v.s.stage.message = Some("Opened a new show from the face example.".into());
+        }
+        if ui.button("Dragon example").on_hover_text("A long spine wired as one chain, two wings, a head, eyes and a belly").clicked() {
+            project::new_show_from(v, "Dragon stage", crate::example_stages::dragon_show());
+            v.s.stage.message = Some("Opened a new show from the dragon example.".into());
+        }
+    });
     if let Some(m) = &v.s.stage.message {
         ui.label(RichText::new(m).color(t.weak).size(t.text_size - 2.0));
     }
@@ -430,6 +524,8 @@ pub fn example_show() -> project::Project {
         snake,
         reverse: false,
         universe_offset: (out - 1) * 4,
+        path_order: 0,
+        path_reverse: false,
         white: WhiteMode::default(),
         groups: groups.iter().map(|g| g.to_string()).collect(),
     };
@@ -456,6 +552,10 @@ pub fn example_show() -> project::Project {
     edges("Triangle", 2, 4, 60, 0.33, 0.73, 0.2, 3, "Triangle");
     edges("Square", 3, 5, 30, 0.67, 0.73, 0.19, 4, "Square");
     o.groups = ["Panels", "Left panel", "Right panel", "Centre matrix", "Shapes", "Triangle", "Square"].iter().map(|s| s.to_string()).collect();
+    use lumen_core::StageRole as R;
+    for (g, r) in [("Panels", R::Fill), ("Left panel", R::Left), ("Right panel", R::Right), ("Centre matrix", R::Centre), ("Shapes", R::Outline), ("Triangle", R::Outline), ("Square", R::Outline)] {
+        o.roles.set(g, Some(r));
+    }
 
     let mut c = Composition::demo();
     c.layers.clear();
