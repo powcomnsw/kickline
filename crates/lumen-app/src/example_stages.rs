@@ -301,4 +301,55 @@ mod tests {
         let cov = coverage(&p);
         assert!(cov.iter().all(|(_, _, share)| *share > 0.0));
     }
+
+    #[test]
+    fn the_left_fader_darkens_only_the_left_side_of_the_stage() {
+        let p = crate::stage::example_show();
+        let mut e = Engine::new(p.composition, p.output);
+        e.comp.director.on = true;
+        e.start_demo_audio();
+        let t0 = Instant::now();
+        let left = e.output.group_members("Left panel");
+        let right = e.output.group_members("Right panel");
+        assert!(!left.is_empty() && !right.is_empty());
+        let run = |e: &mut Engine| {
+            let mut any = vec![false; e.output.fixtures.len()];
+            for k in 0..90 {
+                e.comp.director_rt.energy = 0.9;
+                e.step(1.0 / 44.0, false, t0);
+                if k > 30 && k % 5 == 0 {
+                    for (a, l) in any.iter_mut().zip(lit(e)) {
+                        *a |= l;
+                    }
+                }
+            }
+            any
+        };
+        let before = run(&mut e);
+        assert!(left.iter().all(|&i| before[i]) && right.iter().all(|&i| before[i]));
+        e.comp.gains.left = 0.0;
+        let after = run(&mut e);
+        assert!(left.iter().all(|&i| !after[i]), "left fader at zero: left panel dark");
+        assert!(right.iter().all(|&i| after[i]), "the right side carries on");
+    }
+
+    #[test]
+    fn auto_keeps_a_log_of_what_it_played_for_the_set_overview() {
+        let p = crate::stage::example_show();
+        let mut e = Engine::new(p.composition, p.output);
+        e.start_demo_audio();
+        let t0 = Instant::now();
+        for _ in 0..200 {
+            e.step(1.0 / 44.0, false, t0);
+        }
+        assert!(e.set_log.is_empty(), "nothing is logged while Auto is off");
+        e.comp.director.on = true;
+        for _ in 0..2500 {
+            e.step(1.0 / 44.0, false, t0);
+        }
+        assert!(e.set_log.len() >= 3, "looks changed over the run: {}", e.set_log.len());
+        assert!(e.set_log.windows(2).all(|w| w[1].t >= w[0].t));
+        assert!(e.set_log.windows(2).all(|w| (w[0].section, &w[0].look) != (w[1].section, &w[1].look)), "only changes are kept");
+        assert!(e.set_log.iter().all(|l| !l.look.is_empty()));
+    }
 }

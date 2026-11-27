@@ -4,7 +4,7 @@ use eframe::egui::{Align2, Color32, CornerRadius, FontId, Rect, RichText, Sense,
 use lumen_core::{AudioBands, Frame};
 use eframe::egui;
 use lumen_core::palette::Rgb;
-use lumen_core::{AudioBand, AudioLink, BlendMode, Clip, Effect, Generator, Layer, LayerLook, Paint, Palette, Section, StripClip, StripEffect, StripPixel};
+use lumen_core::{AudioBand, AudioLink, BlendMode, Clip, Effect, Generator, Layer, LayerLook, Paint, Palette, Section, Transport, StripClip, StripEffect, StripPixel};
 
 /// Right-click menu on a clip slot: choose the source and edit its settings.
 fn c32(c: Rgb) -> Color32 {
@@ -350,6 +350,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
             }
             ui.weak("Click a clip to play it · right-click to change it · + to add an effect");
         });
+        crate::perform::scene_cards(app, ui);
     });
     if let Some((l, c)) = trigger {
         app.e.comp.trigger(l, c);
@@ -494,6 +495,13 @@ fn layer_inspector(app: &mut View, ui: &mut egui::Ui, li: usize, groups: &[Strin
             }
             if groups.is_empty() {
                 ui.weak("No groups yet: make them in Set up → Stage");
+            }
+        });
+        ui.end_row();
+        ui.label(RichText::new("Deck").color(t.weak)).on_hover_text("A and B are sides of the crossfader on the Play screen. Both ignores it.");
+        ui.horizontal(|ui| {
+            for (d, n) in [(lumen_core::Deck::Both, "Both"), (lumen_core::Deck::A, "A"), (lumen_core::Deck::B, "B")] {
+                ui.selectable_value(&mut layer.deck, d, n);
             }
         });
         ui.end_row();
@@ -643,6 +651,8 @@ fn clip_inspector(app: &mut View, ui: &mut egui::Ui, li: usize, ci: usize) {
     }
     section_label(ui, "Settings");
     gen_edit(ui, (li, ci), &mut clip.generator);
+    section_label(ui, "Playback");
+    transport_edit(ui, clip);
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         if ui.button("▶ Play").clicked() {
@@ -662,6 +672,32 @@ fn clip_inspector(app: &mut View, ui: &mut egui::Ui, li: usize, ci: usize) {
     if play {
         app.e.comp.trigger(li, ci);
     }
+}
+
+/// Speed, loop or one-shot, and fades for one clip.
+fn transport_edit(ui: &mut egui::Ui, clip: &mut Clip) {
+    ui.horizontal(|ui| {
+        ui.label("Speed");
+        for (label, v) in [("¼×", 0.25), ("½×", 0.5), ("1×", 1.0), ("2×", 2.0), ("4×", 4.0)] {
+            if ui.selectable_label((clip.speed - v).abs() < 1e-3, label).clicked() {
+                clip.speed = v;
+            }
+        }
+    })
+    .response
+    .on_hover_text("How fast this clip runs against the tempo.");
+    ui.add(egui::Slider::new(&mut clip.speed, 0.0625..=16.0).logarithmic(true).text("speed ×"));
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut clip.transport, Transport::Loop, "Loop");
+        ui.selectable_value(&mut clip.transport, Transport::OneShot, "One-shot")
+            .on_hover_text("Plays once from the trigger, then goes dark until it is triggered again.");
+    });
+    if clip.transport == Transport::OneShot {
+        ui.add(egui::Slider::new(&mut clip.length_beats, 0.5..=64.0).text("length (beats)"));
+    }
+    ui.add(egui::Slider::new(&mut clip.fade_in, 0.0..=16.0).text("fade in (beats)"));
+    ui.add(egui::Slider::new(&mut clip.fade_out, 0.0..=16.0).text("fade out (beats)"))
+        .on_hover_text("At the end of a one-shot, and when the clip is stopped.");
 }
 
 /// Settings for an effect, without its colour (that's set separately).

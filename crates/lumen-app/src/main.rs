@@ -1,7 +1,9 @@
 mod advanced_output;
 mod auto;
+mod backdrop;
 mod audio_panel;
 mod clips;
+mod control;
 mod diagnostics;
 mod dmx_monitor;
 mod engine;
@@ -11,6 +13,7 @@ mod guide;
 mod link;
 mod log;
 mod paths;
+mod perform;
 mod project;
 mod stage;
 mod theme;
@@ -40,11 +43,12 @@ pub enum Page {
     Auto,
     Music,
     Dmx,
+    Controllers,
     Diagnostics,
 }
 
 impl Page {
-    const ALL: [Page; 7] = [Page::Output, Page::Stage, Page::Auto, Page::Library, Page::Music, Page::Dmx, Page::Diagnostics];
+    const ALL: [Page; 8] = [Page::Output, Page::Stage, Page::Auto, Page::Library, Page::Music, Page::Controllers, Page::Dmx, Page::Diagnostics];
 
     fn name(self) -> &'static str {
         match self {
@@ -54,6 +58,7 @@ impl Page {
             Page::Auto => "Auto mode",
             Page::Music => "Music",
             Page::Dmx => "DMX values",
+            Page::Controllers => "Controllers",
             Page::Diagnostics => "Diagnostics",
         }
     }
@@ -66,6 +71,7 @@ impl Page {
             Page::Auto => "Style of music, mood, and which effects and colours Auto may use",
             Page::Music => "Audio input and drum detection",
             Page::Dmx => "Every channel being sent, live",
+            Page::Controllers => "MIDI controllers and OSC: faders, pads, learn",
             Page::Diagnostics => "Network checks, log and reports",
         }
     }
@@ -110,6 +116,8 @@ pub struct LumenApp {
     pub page: Page,
     pub play: clips::State,
     pub stage: stage::State,
+    pub backdrop: backdrop::State,
+    pub control: control::Io,
     /// Recent taps of the TAP button.
     taps: Vec<std::time::Instant>,
     /// The last minute of music, for the strip on Play.
@@ -177,6 +185,8 @@ impl LumenApp {
             page: Page::Output,
             play: Default::default(),
             stage: Default::default(),
+            backdrop: Default::default(),
+            control: Default::default(),
             taps: Vec::new(),
             wave: Default::default(),
         }
@@ -232,7 +242,7 @@ impl View<'_> {
     }
 
     /// Tap tempo: the tempo from the last few taps, and the beat lined up with this one.
-    fn tap(&mut self, shift: bool) {
+    pub(crate) fn tap(&mut self, shift: bool) {
         let now = std::time::Instant::now();
         let taps = &mut self.s.taps;
         if taps.last().is_some_and(|l| now.duration_since(*l).as_secs_f64() > 2.0) {
@@ -335,7 +345,9 @@ impl View<'_> {
         }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.add_space(6.0);
+            perform::state_line(self, ui);
             card(ui, "Auto", |ui| auto::card(self, ui));
+            card(ui, "Mix", |ui| perform::mix_card(self, ui));
             card(ui, "What the lights get", |ui| {
                 let w = ui.available_width();
                 stage::paint_lights(ui, self, Vec2::new(w, w), &|_| None);
@@ -344,6 +356,7 @@ impl View<'_> {
                 let px: usize = self.e.lights.iter().map(|l| l.len()).sum();
                 ui.label(egui::RichText::new(format!("{n} fixtures · {px} pixels · {} universes", self.e.dmx.len())).color(t.weak).size(t.text_size - 2.0));
             });
+            card(ui, "Set so far", |ui| perform::set_strip(self, ui));
             card(ui, "Music", |ui| self.music_card(ui));
             card(ui, "Lights", |ui| self.lights_card(ui));
         });
@@ -453,6 +466,7 @@ impl View<'_> {
                 audio_panel::ui(self, ui);
             }
             Page::Dmx => dmx_monitor::ui(self, ui),
+            Page::Controllers => control::page(self, ui),
             Page::Diagnostics => diagnostics::ui(self, ui),
         }
     }
@@ -653,6 +667,8 @@ impl eframe::App for LumenApp {
             }
         }
 
+        backdrop::sync(&mut v, &ctx);
+        control::tick(&mut v);
         v.route_windows();
         // Poll for nodes while output is on or the patch is open.
         let patching = v.mode == Mode::Setup && matches!(v.page, Page::Output | Page::Diagnostics);
@@ -890,6 +906,7 @@ fn apply_args(app: &mut LumenApp, args: &[String]) {
             v.s.mode = Mode::Setup;
             v.s.page = match p {
 "stage" => Page::Stage,
+"controllers" => Page::Controllers,
                 "auto" => Page::Auto,
                 "library" => Page::Library,
                 "music" => Page::Music,
@@ -917,6 +934,10 @@ fn apply_args(app: &mut LumenApp, args: &[String]) {
             v.s.ao.controller = Some(cs);
         } else if arg == "--auto" {
             v.e.comp.director.on = true;
+        } else if let Some(p) = arg.strip_prefix("--backdrop=") {
+            v.e.output.backdrop = Some(lumen_fixtures::Backdrop::new(p));
+        } else if arg == "--straighten" {
+            v.s.backdrop.editing = true;
         } else if arg == "--blackout" {
             v.e.blackout = true;
         } else if arg == "--test-crash" {

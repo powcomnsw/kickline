@@ -321,6 +321,7 @@ mod tests {
             }],
             groups: Vec::new(),
             roles: Default::default(),
+            backdrop: None,
         };
         o.render_dmx(frame)[&(0, 0)][..n].to_vec()
     }

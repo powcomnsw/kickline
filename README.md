@@ -228,6 +228,32 @@ state of each port and how many times output recovered.
 
 </details>
 
+<details>
+<summary><b>Performing: faders, drops, scenes and controllers</b></summary>
+
+The **state line** at the top of the Play side says in words what is wrong
+(output off, no music, a universe failing) or that the show is running.
+**Mix** has Left, Centre and Right faders (they dim the lights whose group has
+that role in Set up → Stage), an **A ↔ B** crossfader (give each layer a Deck
+in its settings) and **Hold to build, release to drop**: hold it (or Space) and
+the lights build; let go and the drop lands. **Scenes** at the bottom of the
+clip grid are the looks Auto knows, with a colour taken from the look; click one
+to play it. **Set so far** is a coloured timeline of what Auto played, with
+drops marked; hover for the look and colours.
+
+Right-click a clip for **speed** (¼× to 4×), **loop or one-shot** and fade in
+and out. Set up → Stage can show a **photo of your rig** behind the fixtures
+(and straighten it by its four corners) to place things against the real thing.
+
+**Set up → Controllers** takes a MIDI controller (pick it, press Learn next to
+a control, move a knob or hit a pad) and OSC (listen on a port; the addresses
+`/kickline/master`, `/left`, `/centre`, `/right`, `/crossfade`, `/blackout`,
+`/drop`, `/tap`, `/auto` and `/column/1…` work with no setup, and Kickline can
+send its fader positions back to a TouchOSC-style app). Bindings are saved with
+the show.
+
+</details>
+
 ## Reporting problems
 
 Open **Diagnostics**. It checks everything Kickline depends on and explains each

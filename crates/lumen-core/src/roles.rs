@@ -124,6 +124,38 @@ impl RoleMap {
     }
 }
 
+/// Performance faders for the left, middle and right of the stage.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RoleGains {
+    pub left: f32,
+    pub centre: f32,
+    pub right: f32,
+}
+
+impl Default for RoleGains {
+    fn default() -> Self {
+        RoleGains { left: 1.0, centre: 1.0, right: 1.0 }
+    }
+}
+
+impl RoleGains {
+    /// The gain for a fixture whose groups have these roles: the lowest that
+    /// applies. Eyes count as the centre. Fixtures with no left, right or
+    /// centre role are not touched.
+    pub fn for_roles(&self, roles: impl IntoIterator<Item = StageRole>) -> f32 {
+        roles
+            .into_iter()
+            .filter_map(|r| match r {
+                StageRole::Left => Some(self.left),
+                StageRole::Right => Some(self.right),
+                StageRole::Centre | StageRole::Eyes => Some(self.centre),
+                _ => None,
+            })
+            .fold(1.0, f32::min)
+            .clamp(0.0, 1.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +222,18 @@ mod tests {
         let j = serde_json::to_string(&r).unwrap();
         assert_eq!(serde_json::from_str::<RoleMap>(&j).unwrap(), r);
         assert_eq!(serde_json::from_str::<RoleMap>("[]").unwrap(), RoleMap::default());
+    }
+
+    #[test]
+    fn the_left_centre_and_right_faders_reach_the_matching_roles() {
+        let g = RoleGains { left: 0.2, centre: 0.5, right: 1.0 };
+        assert_eq!(g.for_roles([StageRole::Left]), 0.2);
+        assert_eq!(g.for_roles([StageRole::Right]), 1.0);
+        assert_eq!(g.for_roles([StageRole::Centre]), 0.5);
+        assert_eq!(g.for_roles([StageRole::Eyes]), 0.5, "eyes are the middle");
+        assert_eq!(g.for_roles([StageRole::Fill, StageRole::Path]), 1.0, "other roles are left alone");
+        assert_eq!(g.for_roles([]), 1.0, "no role, no change");
+        assert_eq!(g.for_roles([StageRole::Left, StageRole::Centre]), 0.2, "the lowest wins");
+        assert_eq!(RoleGains::default().for_roles([StageRole::Left]), 1.0);
     }
 }

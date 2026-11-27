@@ -79,7 +79,23 @@ pub struct Recorder {
 /// How long the music must be silent before the lights idle (a real pause before a drop is a few seconds).
 const IDLE_AFTER_S: f64 = 12.0;
 
+/// One change in what Auto was showing, kept so a night can be reviewed.
+#[derive(Clone, Debug)]
+pub struct SetEvent {
+    /// Seconds since Kickline started.
+    pub t: f64,
+    pub section: lumen_core::Section,
+    pub look: String,
+    pub palette: String,
+    /// The section just became a drop.
+    pub drop: bool,
+}
+
+const SET_LOG_MAX: usize = 1500;
+
 pub struct Engine {
+    /// What Auto played, in order (the set overview).
+    pub set_log: Vec<SetEvent>,
     pub comp: Composition,
     pub output: AdvancedOutput,
     pub frame: Frame,
@@ -184,6 +200,7 @@ impl Engine {
             time_s: 0.0,
             seen_hits: [0; 2],
             prev_section: None,
+            set_log: Vec::new(),
             quiet_s: 0.0,
             quiet_hits: 0,
             panics: 0,
@@ -218,6 +235,28 @@ impl Engine {
         let r = self.recorder.take()?;
         log::info("recording", format!("stopped after {:.0} s", r.rec.seconds()));
         Some(r.rec)
+    }
+
+    /// Seconds the engine has been running.
+    pub fn uptime_s(&self) -> f64 {
+        self.time_s
+    }
+
+    /// Note a change of look or section while Auto is running.
+    fn log_set(&mut self) {
+        if !self.comp.director.on || self.comp.director_rt.look_name.is_empty() {
+            return;
+        }
+        let section = self.comp.sections.current();
+        let look = &self.comp.director_rt.look_name;
+        if self.set_log.last().is_some_and(|l| l.section == section && l.look == *look) {
+            return;
+        }
+        let drop = section == lumen_core::Section::Drop && self.set_log.last().is_none_or(|l| l.section != section);
+        self.set_log.push(SetEvent { t: self.time_s, section, look: look.clone(), palette: self.comp.director_rt.palette_name.clone(), drop });
+        if self.set_log.len() > SET_LOG_MAX {
+            self.set_log.remove(0);
+        }
     }
 
     pub fn mark_section(&mut self, mark: u8) {
@@ -350,7 +389,7 @@ impl Engine {
         // A drop always lands on a "1".
         let section = self.comp.sections.current();
         if self.prev_section != Some(section) {
-            if section == lumen_core::Section::Drop && self.prev_section.is_some() {
+            if section == lumen_core::Section::Drop && self.prev_section.is_some() && !self.comp.sections.is_forced() {
                 self.tracker.anchor_bar(self.time_s);
             }
             self.prev_section = Some(section);
@@ -370,6 +409,7 @@ impl Engine {
         self.update_audio(dt);
         let t = Instant::now();
         self.frame = self.comp.render();
+        self.log_set();
         Metrics::smooth(
             &mut self.metrics.render_ms,
             t.elapsed().as_secs_f32() * 1000.0,
@@ -493,6 +533,8 @@ impl Engine {
         );
         let blackout = self.blackout;
         let fixtures = &self.output.fixtures;
+        // Left, centre and right faders, per fixture, from the roles of its groups.
+        let role_gain: Vec<f32> = fixtures.iter().map(|f| self.comp.gains.for_roles(f.groups.iter().filter_map(|g| self.output.roles.get(g)))).collect();
         let main = &self.frame;
         self.dmx = self.output.render_dmx_each(&|fi| frames.get(frame_of[fi]).unwrap_or(main), &|p, sampled| {
             let c = match test {
@@ -534,6 +576,10 @@ impl Engine {
                         }
                     }
                 }
+            };
+            let c = match (test, role_gain.get(p.fixture)) {
+                (None, Some(&g)) if g < 1.0 => Rgba { r: c.r * g, g: c.g * g, b: c.b * g, a: c.a },
+                _ => c,
             };
             if let Some(px) = lights.borrow_mut().get_mut(p.fixture).and_then(|l| l.get_mut(p.index)) {
                 *px = c.to_u8();

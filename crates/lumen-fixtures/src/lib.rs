@@ -500,6 +500,34 @@ fn default_aspect() -> f32 {
     16.0 / 9.0
 }
 
+/// A photo of the rig shown behind the stage, to place fixtures against.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Backdrop {
+    /// Where the photo is on this computer.
+    pub path: String,
+    /// The four corners of the stage in the photo, as 0..1 of its width and
+    /// height: top-left, top-right, bottom-right, bottom-left.
+    #[serde(default = "full_photo")]
+    pub corners: [[f32; 2]; 4],
+    /// How visible the photo is (0..1).
+    #[serde(default = "backdrop_opacity")]
+    pub opacity: f32,
+}
+
+pub fn full_photo() -> [[f32; 2]; 4] {
+    [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+}
+
+fn backdrop_opacity() -> f32 {
+    0.5
+}
+
+impl Backdrop {
+    pub fn new(path: impl Into<String>) -> Self {
+        Backdrop { path: path.into(), corners: full_photo(), opacity: backdrop_opacity() }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdvancedOutput {
     /// Composition width / height. Keep in sync with the composition.
@@ -514,11 +542,14 @@ pub struct AdvancedOutput {
     /// What each group is for (Auto plays looks written for these roles).
     #[serde(default, skip_serializing_if = "lumen_core::RoleMap::is_empty")]
     pub roles: lumen_core::RoleMap,
+    /// A photo behind the stage (not part of what the lights show).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backdrop: Option<Backdrop>,
 }
 
 impl Default for AdvancedOutput {
     fn default() -> Self {
-        AdvancedOutput { aspect: default_aspect(), lumiverses: Vec::new(), types: Vec::new(), fixtures: Vec::new(), groups: Vec::new(), roles: Default::default() }
+        AdvancedOutput { aspect: default_aspect(), lumiverses: Vec::new(), types: Vec::new(), fixtures: Vec::new(), groups: Vec::new(), roles: Default::default(), backdrop: None }
     }
 }
 
@@ -1286,7 +1317,7 @@ mod tests {
     use super::*;
 
     fn one(t: FixtureType, fx: Fixture) -> AdvancedOutput {
-        AdvancedOutput { aspect: 1.0, lumiverses: vec![Lumiverse::new("L", 3)], types: vec![t], fixtures: vec![fx], groups: Vec::new(), roles: Default::default() }
+        AdvancedOutput { aspect: 1.0, lumiverses: vec![Lumiverse::new("L", 3)], types: vec![t], fixtures: vec![fx], groups: Vec::new(), roles: Default::default(), backdrop: None }
     }
 
     fn fx(address: u16) -> Fixture {
@@ -1443,6 +1474,7 @@ mod tests {
             fixtures: vec![],
             groups: Vec::new(),
             roles: Default::default(),
+            backdrop: None,
         }
     }
 

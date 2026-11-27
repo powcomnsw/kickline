@@ -12,11 +12,55 @@ use serde::{Deserialize, Serialize};
 pub struct Clip {
     pub name: String,
     pub generator: Generator,
+    /// How fast the clip runs against the clock (0.25 to 4 is usual).
+    #[serde(default = "clip_speed")]
+    pub speed: f32,
+    /// Loop for ever, or play once and go dark.
+    #[serde(default)]
+    pub transport: Transport,
+    /// How long a one-shot plays, in clip beats.
+    #[serde(default = "eight")]
+    pub length_beats: f32,
+    /// Clip beats to fade in after a trigger.
+    #[serde(default)]
+    pub fade_in: f32,
+    /// Clip beats to fade out: at the end of a one-shot, and when the clip is stopped.
+    #[serde(default)]
+    pub fade_out: f32,
+}
+
+fn clip_speed() -> f32 {
+    1.0
+}
+
+fn half() -> f32 {
+    0.5
+}
+
+fn eight() -> f32 {
+    8.0
+}
+
+/// Which side of the crossfader a layer sits on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Deck {
+    /// Not on a deck: the crossfader leaves it alone.
+    #[default]
+    Both,
+    A,
+    B,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Transport {
+    #[default]
+    Loop,
+    OneShot,
 }
 
 impl Clip {
     pub fn new(name: impl Into<String>, generator: Generator) -> Self {
-        Clip { name: name.into(), generator }
+        Clip { name: name.into(), generator, speed: 1.0, transport: Transport::Loop, length_beats: 8.0, fade_in: 0.0, fade_out: 0.0 }
     }
 }
 
@@ -46,11 +90,67 @@ pub struct Layer {
     /// Beat position at which the active clip was triggered.
     #[serde(skip)]
     pub trigger_beat: f64,
+    /// A or B side of the crossfader (Both = not on a deck).
+    #[serde(default)]
+    pub deck: Deck,
     #[serde(skip)]
     seen_hits: Option<u64>,
+    /// Beat at which the clip was told to stop and is fading out.
+    #[serde(skip)]
+    pub released_at: Option<f64>,
 }
 
 impl Layer {
+    /// How much of the layer the crossfader lets through.
+    pub fn deck_gain(&self, crossfade: f32) -> f32 {
+        let x = crossfade.clamp(0.0, 1.0);
+        match self.deck {
+            Deck::Both => 1.0,
+            Deck::A => (2.0 * (1.0 - x)).min(1.0),
+            Deck::B => (2.0 * x).min(1.0),
+        }
+    }
+
+    /// The active clip.
+    pub fn clip(&self) -> Option<&Clip> {
+        self.active.and_then(|i| self.clips.get(i)).and_then(|c| c.as_ref())
+    }
+
+    /// The active clip's own beat at clock `beat`: time since the trigger, scaled by its speed.
+    pub fn local_beat(&self, beat: f64) -> f64 {
+        let speed = self.clip().map_or(1.0, |c| c.speed.clamp(0.0625, 16.0)) as f64;
+        (beat - self.trigger_beat).max(0.0) * speed
+    }
+
+    /// What the layer plays at clock `beat`: the clip's own beat and its fade
+    /// (0 to 1), or None when nothing is playing (no clip, a finished
+    /// one-shot, or a fade-out that has run out).
+    pub fn playing(&self, beat: f64) -> Option<(f64, f32)> {
+        let clip = self.clip()?;
+        let local = self.local_beat(beat);
+        let mut fade = 1.0f32;
+        if clip.fade_in > 0.0 {
+            fade = fade.min((local / clip.fade_in as f64) as f32);
+        }
+        if clip.transport == Transport::OneShot {
+            if local >= clip.length_beats as f64 {
+                return None;
+            }
+            if clip.fade_out > 0.0 {
+                fade = fade.min(((clip.length_beats as f64 - local) / clip.fade_out as f64) as f32);
+            }
+        }
+        if let Some(r) = self.released_at {
+            let rel = (beat - r).max(0.0) * clip.speed.clamp(0.0625, 16.0) as f64;
+            let gone = if clip.fade_out > 0.0 { (rel / clip.fade_out as f64) as f32 } else { 1.0 };
+            if gone >= 1.0 {
+                return None;
+            }
+            fade *= 1.0 - gone;
+        }
+        Some((local, fade.clamp(0.0, 1.0)))
+    }
+
     pub fn new(name: impl Into<String>, columns: usize) -> Self {
         Layer {
             name: name.into(),
@@ -65,7 +165,9 @@ impl Layer {
             target: None,
             looks: [LayerLook::Keep; 5],
             trigger_beat: 0.0,
+            deck: Deck::Both,
             seen_hits: None,
+            released_at: None,
         }
     }
 
@@ -88,6 +190,15 @@ pub struct Composition {
     pub layers: Vec<Layer>,
     /// Master brightness 0..1.
     pub master: f32,
+    /// Crossfader: 0 = all deck A, 1 = all deck B, the middle = both at full.
+    #[serde(default = "half")]
+    pub crossfade: f32,
+    /// Left, centre and right faders for the stage roles.
+    #[serde(default)]
+    pub gains: crate::roles::RoleGains,
+    /// MIDI and OSC controls (saved with the show).
+    #[serde(default)]
+    pub controls: crate::controls::ControlMap,
     pub bpm: f64,
     #[serde(default)]
     pub palettes: Palettes,
@@ -150,6 +261,9 @@ impl Composition {
             columns,
             layers: Vec::new(),
             master: 1.0,
+            crossfade: 0.5,
+            gains: Default::default(),
+            controls: Default::default(),
             bpm: 120.0,
             palettes: Palettes::default(),
             looks: Looks::default(),
@@ -268,11 +382,15 @@ impl Composition {
         if jump.abs() > 8.0 {
             for l in &mut self.layers {
                 l.trigger_beat += jump;
+                if let Some(r) = &mut l.released_at {
+                    *r += jump;
+                }
             }
         }
         self.beat = beat;
         self.analysis_beat = beat;
         self.bpm = bpm;
+        self.settle_releases();
     }
 
     /// Beat and Bar pulses from the clock: 1.0 on the beat, fading over ~150 ms.
@@ -385,6 +503,7 @@ impl Composition {
             if matches!(l.clips.get(column), Some(Some(_))) {
                 l.active = Some(column);
                 l.trigger_beat = beat;
+                l.released_at = None;
             }
         }
     }
@@ -396,9 +515,27 @@ impl Composition {
         }
     }
 
+    /// Stop a layer's clip: at once, or by fading out if the clip has a fade-out time.
     pub fn stop(&mut self, layer: usize) {
+        let beat = self.beat;
         if let Some(l) = self.layers.get_mut(layer) {
-            l.active = None;
+            if l.clip().is_some_and(|c| c.fade_out > 0.0) && l.released_at.is_none() {
+                l.released_at = Some(beat);
+            } else {
+                l.active = None;
+                l.released_at = None;
+            }
+        }
+    }
+
+    /// Finish stops whose fade-out has run out.
+    fn settle_releases(&mut self) {
+        let beat = self.beat;
+        for l in &mut self.layers {
+            if l.released_at.is_some() && l.playing(beat).is_none() {
+                l.active = None;
+                l.released_at = None;
+            }
         }
     }
 
@@ -428,7 +565,8 @@ impl Composition {
             }
             let Some(Some(clip)) = layer.active.and_then(|i| layer.clips.get(i)) else { continue };
             let Generator::Strip(sc) = clip.generator else { continue };
-            let mut opacity = layer.opacity;
+            let Some((local, fade)) = layer.playing(self.beat) else { continue };
+            let mut opacity = layer.opacity * fade * layer.deck_gain(self.crossfade);
             if let Some(link) = layer.audio_opacity {
                 opacity *= link.factor(&self.audio);
             }
@@ -437,7 +575,7 @@ impl Composition {
             }
             passes.push(StripPass {
                 clip: sc,
-                beat: (self.beat - layer.trigger_beat).max(0.0),
+                beat: local,
                 opacity,
                 blend: layer.blend,
                 effects: layer.effects.clone(),
@@ -475,13 +613,13 @@ impl Composition {
                     None => continue,
                 },
             };
-            let local_beat = (self.beat - layer.trigger_beat).max(0.0);
+            let Some((local_beat, fade)) = layer.playing(self.beat) else { continue };
             scratch.pixels.fill(Default::default());
             clip.generator.render(&mut scratch, local_beat, &self.audio, &palette);
             for e in &layer.effects {
                 e.apply(&mut scratch, local_beat, &self.audio);
             }
-            let mut opacity = layer.opacity;
+            let mut opacity = layer.opacity * fade * layer.deck_gain(self.crossfade);
             if let Some(link) = layer.audio_opacity {
                 opacity *= link.factor(&self.audio);
             }
@@ -833,5 +971,189 @@ mod tests {
         edited.master = 0.5;
         c.replace_show(edited);
         assert_eq!(c.auto.len(), n, "undo/redo must not restart Auto");
+    }
+
+    // ---- Clip speed, transport and fades
+
+    fn white_layer(clip: Clip) -> Composition {
+        let mut c = Composition::new(2, 2, 1);
+        let mut l = Layer::new("L", 1);
+        l.blend = BlendMode::Normal;
+        l.clips[0] = Some(clip);
+        c.layers.push(l);
+        c
+    }
+
+    fn solid() -> Clip {
+        Clip::new("w", Generator::Solid { color: Paint::Rgb([1.0, 1.0, 1.0]) })
+    }
+
+    fn level(c: &Composition) -> f32 {
+        c.render().pixels[0].r
+    }
+
+    #[test]
+    fn a_clip_speed_scales_its_own_beat_not_the_clock() {
+        let mut clip = Clip::new("m", Generator::Strobe { color: Paint::Rgb([1.0, 1.0, 1.0]), per_beat: 1.0, duty: 0.5 });
+        let mut c = white_layer(clip.clone());
+        c.trigger(0, 0);
+        c.set_clock(0.25, 120.0);
+        let normal = level(&c);
+        clip.speed = 2.0;
+        let mut c2 = white_layer(clip);
+        c2.trigger(0, 0);
+        c2.set_clock(0.25, 120.0);
+        // At 2x, a quarter beat of clock is half a beat of the clip: past the half-duty edge.
+        assert!(normal > 0.0 && level(&c2) == 0.0, "{normal} vs {}", level(&c2));
+        assert_eq!(c.layers[0].local_beat(c.beat), 0.25);
+        assert_eq!(c2.layers[0].local_beat(c2.beat), 0.5);
+    }
+
+    #[test]
+    fn a_loop_plays_on_and_a_one_shot_plays_once_then_goes_dark() {
+        let mut one = solid();
+        one.transport = Transport::OneShot;
+        one.length_beats = 4.0;
+        let mut c = white_layer(one);
+        c.trigger(0, 0);
+        c.set_clock(3.9, 120.0);
+        assert_eq!(level(&c), 1.0);
+        c.set_clock(4.1, 120.0);
+        assert_eq!(level(&c), 0.0, "the one-shot is over");
+        // Re-triggering plays it again.
+        c.trigger(0, 0);
+        c.set_clock(4.2, 120.0);
+        assert_eq!(level(&c), 1.0);
+        let mut c = white_layer(solid());
+        c.trigger(0, 0);
+        c.set_clock(500.0, 120.0);
+        assert_eq!(level(&c), 1.0, "a loop never ends");
+    }
+
+    #[test]
+    fn a_one_shot_length_follows_its_speed() {
+        let mut one = solid();
+        one.transport = Transport::OneShot;
+        one.length_beats = 4.0;
+        one.speed = 2.0;
+        let mut c = white_layer(one);
+        c.trigger(0, 0);
+        c.set_clock(1.9, 120.0);
+        assert_eq!(level(&c), 1.0);
+        c.set_clock(2.1, 120.0);
+        assert_eq!(level(&c), 0.0, "4 beats of clip at 2x is 2 beats of clock");
+    }
+
+    #[test]
+    fn a_clip_fades_in_over_its_fade_time() {
+        let mut clip = solid();
+        clip.fade_in = 4.0;
+        let mut c = white_layer(clip);
+        c.set_clock(10.0, 120.0);
+        c.trigger(0, 0);
+        c.set_clock(12.0, 120.0);
+        assert!((level(&c) - 0.5).abs() < 1e-5, "{}", level(&c));
+        c.set_clock(14.0, 120.0);
+        assert!((level(&c) - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_one_shot_fades_out_over_its_last_beats() {
+        let mut clip = solid();
+        clip.transport = Transport::OneShot;
+        clip.length_beats = 8.0;
+        clip.fade_out = 2.0;
+        let mut c = white_layer(clip);
+        c.trigger(0, 0);
+        c.set_clock(7.0, 120.0);
+        assert!((level(&c) - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn stopping_a_clip_with_a_fade_out_lets_it_go_gently_then_stops() {
+        let mut clip = solid();
+        clip.fade_out = 4.0;
+        let mut c = white_layer(clip);
+        c.trigger(0, 0);
+        c.set_clock(1.0, 120.0);
+        c.stop(0);
+        assert!(c.layers[0].active.is_some(), "still fading");
+        c.set_clock(3.0, 120.0);
+        assert!((level(&c) - 0.5).abs() < 1e-5, "{}", level(&c));
+        c.set_clock(5.5, 120.0);
+        assert_eq!(c.layers[0].active, None, "done");
+        assert_eq!(level(&c), 0.0);
+        // A clip with no fade-out stops at once, as before.
+        let mut c = white_layer(solid());
+        c.trigger(0, 0);
+        c.stop(0);
+        assert_eq!(c.layers[0].active, None);
+    }
+
+    #[test]
+    fn clips_saved_before_speed_and_fades_still_open() {
+        let mut v = serde_json::to_value(solid()).unwrap();
+        for k in ["speed", "transport", "length_beats", "fade_in", "fade_out"] {
+            v.as_object_mut().unwrap().remove(k);
+        }
+        let c: Clip = serde_json::from_value(v).unwrap();
+        assert_eq!((c.speed, c.transport, c.length_beats, c.fade_in, c.fade_out), (1.0, Transport::Loop, 8.0, 0.0, 0.0));
+    }
+
+    // ---- A/B decks and the crossfader
+
+    fn two_decks() -> Composition {
+        let mut c = Composition::new(1, 1, 1);
+        let mk = |col, deck| {
+            let mut l = Layer::new("L", 1);
+            l.blend = BlendMode::Add;
+            l.deck = deck;
+            l.clips[0] = Some(Clip::new("c", Generator::Solid { color: col }));
+            l
+        };
+        c.layers.push(mk(Paint::Rgb([1.0, 0.0, 0.0]), Deck::A));
+        c.layers.push(mk(Paint::Rgb([0.0, 0.0, 1.0]), Deck::B));
+        c.trigger_column(0);
+        c
+    }
+
+    #[test]
+    fn the_crossfader_moves_between_deck_a_and_deck_b() {
+        let mut c = two_decks();
+        let px = |c: &Composition| {
+            let p = c.render().pixels[0];
+            (p.r, p.b)
+        };
+        c.crossfade = 0.0;
+        assert_eq!(px(&c), (1.0, 0.0), "all A");
+        c.crossfade = 1.0;
+        assert_eq!(px(&c), (0.0, 1.0), "all B");
+        c.crossfade = 0.5;
+        assert_eq!(px(&c), (1.0, 1.0), "both at full in the middle, like a DJ mixer");
+        c.crossfade = 0.25;
+        let (r, b) = px(&c);
+        assert!((r - 1.0).abs() < 1e-6 && (b - 0.5).abs() < 1e-6, "{r} {b}");
+    }
+
+    #[test]
+    fn layers_not_on_a_deck_ignore_the_crossfader() {
+        let mut c = two_decks();
+        c.layers[0].deck = Deck::Both;
+        c.crossfade = 1.0;
+        assert_eq!(c.render().pixels[0].r, 1.0);
+    }
+
+    #[test]
+    fn a_crossfader_in_the_middle_is_the_default_and_old_shows_open() {
+        let c = Composition::new(1, 1, 1);
+        assert_eq!(c.crossfade, 0.5);
+        let mut v = serde_json::to_value(two_decks()).unwrap();
+        v.as_object_mut().unwrap().remove("crossfade");
+        for l in v["layers"].as_array_mut().unwrap() {
+            l.as_object_mut().unwrap().remove("deck");
+        }
+        let back: Composition = serde_json::from_value(v).unwrap();
+        assert_eq!(back.crossfade, 0.5);
+        assert!(back.layers.iter().all(|l| l.deck == Deck::Both));
     }
 }

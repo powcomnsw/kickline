@@ -182,6 +182,9 @@ pub struct SectionDetector {
     pub profile: GenreProfile,
     /// Sections heard so far, oldest first, with their length in beats.
     pub past: VecDeque<(Section, u32)>,
+    /// A section the DJ is calling by hand (the hold-to-drop button): what it
+    /// is and how many beats it still lasts.
+    forced: Option<(Section, u32)>,
 }
 
 impl Default for SectionDetector {
@@ -200,6 +203,7 @@ impl Default for SectionDetector {
             reading: Reading::default(),
             profile: GenreProfile::default(),
             past: VecDeque::new(),
+            forced: None,
         }
     }
 }
@@ -212,7 +216,22 @@ impl SectionDetector {
     }
 
     pub fn current(&self) -> Section {
-        self.current
+        self.forced.map_or(self.current, |(s, _)| s)
+    }
+
+    /// True while the DJ's own call (build or drop) overrides the listening.
+    pub fn is_forced(&self) -> bool {
+        self.forced.is_some()
+    }
+
+    /// Call a section by hand for `beats` beats (`u32::MAX` until released).
+    pub fn force(&mut self, section: Section, beats: u32) {
+        self.forced = Some((section, beats));
+    }
+
+    /// Hand the call back to the listening.
+    pub fn release_force(&mut self) {
+        self.forced = None;
     }
 
     /// True once enough music has been heard to judge.
@@ -241,6 +260,11 @@ impl SectionDetector {
             return None;
         }
         // A beat has ended.
+        if let Some((sec, left)) = self.forced {
+            if left != u32::MAX {
+                self.forced = (left > 1).then_some((sec, left - 1));
+            }
+        }
         let n = self.acc_n.max(1) as f32;
         let sample = BeatSample { kicks: self.acc.kicks, snares: self.acc.snares, low: self.acc.low / n, high: self.acc.high / n, level: self.acc.level / n };
         self.acc = BeatSample::default();
@@ -582,5 +606,29 @@ mod tests {
             play(&mut d, &mut a, &mut beat, 96, |a, b| beat_bands((b % 5 == 0) as u32, (b % 3 == 0) as u32, 0.4 + (b % 7) as f32 * 0.05, 0.3, 0.6)(a))
         };
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn a_called_section_overrides_the_listening_until_released_or_timed_out() {
+        let mut d = SectionDetector::default();
+        let heard = d.current();
+        d.force(Section::BuildUp, u32::MAX);
+        assert!(d.is_forced());
+        assert_eq!(d.current(), Section::BuildUp);
+        let a = AudioBands::default();
+        for b in 0..40 {
+            d.update(&a, b as f64 + 0.5);
+        }
+        assert_eq!(d.current(), Section::BuildUp, "a held build never times out");
+        d.force(Section::Drop, 3);
+        for b in 40..43 {
+            d.update(&a, b as f64 + 0.5);
+        }
+        assert!(!d.is_forced(), "a called drop lasts its beats, then hands back");
+        assert_ne!(d.current(), Section::Drop);
+        let _ = heard;
+        d.force(Section::Drop, 100);
+        d.release_force();
+        assert!(!d.is_forced());
     }
 }

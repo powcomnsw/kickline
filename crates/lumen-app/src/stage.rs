@@ -49,6 +49,7 @@ pub fn paint_lights(ui: &mut egui::Ui, v: &View, size: Vec2, outline: &dyn Fn(us
     let (resp, painter) = ui.allocate_painter(Vec2::new(w, w / aspect), Sense::click());
     let r = resp.rect;
     painter.rect_filled(r, t.radius, Color32::from_rgb(8, 7, 6));
+    crate::backdrop::paint(&painter, r, v);
     let dot = (r.width() / 300.0).clamp(1.3, 3.2);
     for (fi, fx) in v.e.output.fixtures.iter().enumerate() {
         let Some(ty) = v.e.output.types.get(fx.type_id) else { continue };
@@ -174,6 +175,12 @@ pub fn ui(v: &mut View, ui: &mut egui::Ui) {
             };
         });
         ui.add_space(6.0);
+        crate::backdrop::controls(v, ui);
+        if v.s.backdrop.editing {
+            let size = ui.available_size() - Vec2::new(0.0, 20.0);
+            crate::backdrop::edit(v, ui, size);
+            return;
+        }
         let gi = sel.as_ref().and_then(|g| groups.iter().position(|x| x == g));
         let fixtures = v.e.output.fixtures.clone();
         let resp = paint_lights(ui, v, ui.available_size() - Vec2::new(0.0, 60.0), &|fi| {

@@ -30,15 +30,15 @@ Key decisions:
 - [x] Add / remove layers — reorder layers, add columns still to do
 - [x] Advanced Output: lumiverses, fixtures placed by dragging/resizing/rotating, Fixture Editor, DMX Monitor
 - [x] Tap tempo (beat-phase nudge, beat-quantised triggering still to do)
-- [ ] Per-clip speed multiplier and transport (loop / one-shot)
+- [x] Per-clip speed multiplier and transport (loop / one-shot)
 - [x] Blackout (per-layer solo still to do)
 - [x] File dialogs, autosave, undo/redo
 
 ### M2 — Control surfaces
-- [ ] MIDI input with learn mode (faders, pads, column launch)
-- [ ] OSC in/out (TouchOSC, Lemur, Resolume-compatible address space where practical)
-- [ ] Crossfader / A-B decks
-- [ ] Clip and layer transition times (fade in/out)
+- [x] MIDI input with learn mode (faders, pads, column launch)
+- [x] OSC in/out (TouchOSC, Lemur, Resolume-compatible address space where practical)
+- [x] Crossfader / A-B decks
+- [x] Clip and layer transition times (fade in/out)
 
 ### M3 — Real fixture support
 - [x] Fixture library: 1,781 built-in QLC+ fixtures, `.qxf` import (covers Open Fixture Library and GDTF via OFL)
@@ -115,7 +115,7 @@ Key decisions:
 - [ ] Tempo and downbeat estimated from the audio (for sets without Link)
 - [ ] Per-effect weights and per-group rules in Auto
 - [ ] Genre suggested from tempo and kick pattern
-- [ ] MIDI input with learn mode, so a pad can hold, release or switch Auto
+- [x] MIDI input with learn mode, so a pad can hold, release or switch Auto
 
 ## Known limitations of v0.6
 - Imported moving heads light up but don't move yet: pan/tilt are held centred.

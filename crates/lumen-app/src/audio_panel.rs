@@ -196,14 +196,13 @@ fn timing(app: &mut View, ui: &mut egui::Ui) {
             );
         }
     }
-    ui.add_enabled(
-        app.e.sync.link_enabled,
-        egui::Slider::new(&mut app.e.sync.lookahead_ms, 0.0..=100.0)
+    ui.add(
+        egui::Slider::new(&mut app.e.sync.lookahead_ms, 0.0..=150.0)
             .suffix(" ms")
-            .text("fire early (Link)"),
+            .text("fire early"),
     )
     .on_hover_text(
-        "Beat and Bar triggers fire this much before the beat, to cancel node and fixture delay.",
+        "Beat, Bar and beat-timed effects fire this much before the beat (from the music or Link), to cancel the delay in the capture, controller and LEDs. Raise it if the lights land late.",
     );
     ui.add(
         egui::Slider::new(&mut app.e.sync.send_rate_hz, 20.0..=120.0)
