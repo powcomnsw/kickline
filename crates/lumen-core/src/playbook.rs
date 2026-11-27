@@ -119,6 +119,11 @@ const fn look(id: &'static str, section: Section, wash: Option<Move>, motion: Op
 
 use Section::{BuildUp, Drop, Groove, Melodic, Pause};
 
+/// What plays when the music has stopped for good: a slow, dim breathing
+/// wash, so the room never goes dark and never freezes. Not in `LOOKS`: it is
+/// never picked, only used by the fail-soft rule.
+pub const IDLE: Look = look("idle", Pause, Some(mv("Breathe", 0, 0.8)), None, None);
+
 /// The built-in looks (compiled in; a show stores only what the user changed).
 pub const LOOKS: &[Look] = &[
     // ---- Groove: steady motion on the beat.

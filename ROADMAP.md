@@ -29,10 +29,10 @@ Key decisions:
 - [x] Clip editing in UI (right-click: source, parameters, rename) — drag to reorder still to do
 - [x] Add / remove layers — reorder layers, add columns still to do
 - [x] Advanced Output: lumiverses, fixtures placed by dragging/resizing/rotating, Fixture Editor, DMX Monitor
-- [ ] Tap tempo, beat-phase nudge, beat-quantised triggering
+- [x] Tap tempo (beat-phase nudge, beat-quantised triggering still to do)
 - [ ] Per-clip speed multiplier and transport (loop / one-shot)
-- [ ] Blackout and per-layer solo
-- [ ] File dialogs, autosave, undo/redo
+- [x] Blackout (per-layer solo still to do)
+- [x] File dialogs, autosave, undo/redo
 
 ### M2 — Control surfaces
 - [ ] MIDI input with learn mode (faders, pads, column launch)
@@ -54,7 +54,7 @@ Key decisions:
 ### M4 — Media and audio
 - [ ] Video / image / GIF clips (ffmpeg or GStreamer), loop and scrub
 - [x] Audio input (incl. Windows loopback), 5 bands + level, kick/snare/hat detection, per-layer routing
-- [ ] Auto-BPM from detected kicks, beat-quantised clip changes
+- [x] Auto-BPM from the music (beat tracker; Link and typed BPM are helpers). Beat-quantised clip changes still to do
 - [x] Ableton Link tempo/beat sync (rekordbox Performance mode)
 - [x] rekordbox direct capture on macOS 14.2+ (process tap) — needs first test on a real Mac
 - [ ] Pro DJ Link (CDJs / rekordbox Export mode)
@@ -119,12 +119,17 @@ Key decisions:
 
 ## Known limitations of v0.6
 - Imported moving heads light up but don't move yet: pan/tilt are held centred.
-- Drum detection is tuned for four-on-the-floor dance music; use the Tuning sliders for other styles.
+- Drum and section detection default to four-on-the-floor house; pick the genre in Auto mode (six profiles, including half-time hip-hop and drum & bass) for other styles.
 - Loopback capture is built in on Windows only; macOS needs BlackHole/Loopback.
 - Resolume's FFGL/ISF plugins, video codecs (DXV) and NDI are out of scope for v0.1.
 
-## Auto VJ (planned)
+## Auto VJ
 
-The plan for running a whole set by itself (tempo from the audio, a playbook
-of looks per section, stage roles, Show mode) is in
-[docs/design/auto-vj.md](docs/design/auto-vj.md). Nothing in it is built yet.
+The plan for running a whole set by itself is in
+[docs/design/auto-vj.md](docs/design/auto-vj.md). Built: session recorder and
+replay tests (Phase 0); beat tracker, two clocks, phrase and set memory
+(1); a playbook of ten-plus looks per section (2, 4); stage roles, path
+order, layout suggestions, the role editor and the face and dragon examples
+(3); soak test, fail-soft idle look, engine panic recovery, Show mode and a
+before-the-show check (5). Still to do: signature looks per stage, and
+validating tempo and section accuracy on the user's own recordings.

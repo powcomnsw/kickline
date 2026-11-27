@@ -1,4 +1,4 @@
-LUMEN FOR macOS
+KICKLINE FOR macOS
 
 Install
   Drag Kickline into the Applications folder.

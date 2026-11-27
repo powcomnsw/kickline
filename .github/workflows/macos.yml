@@ -36,6 +36,12 @@ jobs:
       - name: Test
         # A failing test stops the release: nothing broken gets published.
         run: cargo test --workspace --locked
+      - name: Soak (20 minutes of music, headless)
+        # Auto runs a long set with the feed dropping out now and then: nothing
+        # may panic, grow or fall behind (99.9% of ticks under 5 ms).
+        env:
+          SOAK_MINUTES: "20"
+        run: cargo test --release -p lumen-app --locked soak_long -- --ignored --nocapture
       - name: Build app and disk image
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}

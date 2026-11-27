@@ -626,9 +626,16 @@ impl eframe::App for LumenApp {
                 }
             }
             v.restore_tick += 1;
-            if v.restore_tick > 120 * 150 {
+            if v.restore_tick > 120 * 150 && !v.e.comp.director.show_mode {
                 v.restore_audio = None;
             }
+        }
+        // Show mode: all night, keep output and Auto on and keep looking for the music.
+        if v.e.comp.director.show_mode && v.restore_tick % 120 == 60 && v.e.keep_show_going() && v.restore_audio.is_none() {
+            v.restore_audio = audio_panel::saved();
+        }
+        if v.e.comp.director.show_mode {
+            v.restore_tick = v.restore_tick.wrapping_add(1);
         }
         project::tick(&mut v, &ctx);
         if let Some(at) = v.export_after {

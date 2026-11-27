@@ -3,15 +3,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/powcomnsw/lumen/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/powcomnsw/lumen?style=flat-square&color=ff8a1f&label=download"></a>
-  <a href="https://github.com/powcomnsw/lumen/actions/workflows/macos.yml"><img alt="Mac build" src="https://img.shields.io/github/actions/workflow/status/powcomnsw/lumen/macos.yml?style=flat-square&label=mac%20build"></a>
+  <a href="https://github.com/powcomnsw/kickline/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/powcomnsw/kickline?style=flat-square&color=ff8a1f&label=download"></a>
+  <a href="https://github.com/powcomnsw/kickline/actions/workflows/macos.yml"><img alt="Mac build" src="https://img.shields.io/github/actions/workflow/status/powcomnsw/kickline/macos.yml?style=flat-square&label=mac%20build"></a>
   <img alt="macOS 11+" src="https://img.shields.io/badge/macOS-11%2B-2a2018?style=flat-square">
   <img alt="Licence" src="https://img.shields.io/badge/licence-MIT%20%2F%20Apache--2.0-2a2018?style=flat-square">
   <img alt="Written in Rust" src="https://img.shields.io/badge/rust-egui%20%2B%20wgpu-2a2018?style=flat-square">
 </p>
 
 <p align="center">
-  <b><a href="https://github.com/powcomnsw/lumen/releases/latest">Download for Mac</a></b>
+  <b><a href="https://github.com/powcomnsw/kickline/releases/latest">Download for Mac</a></b>
   &nbsp;·&nbsp; <a href="#quick-start">Quick start</a>
   &nbsp;·&nbsp; <a href="#features">Features</a>
   &nbsp;·&nbsp; <a href="#saving-your-show">Saving</a>
@@ -106,7 +106,7 @@ rig.
 
 ## Quick start
 
-1. **Install.** Download the `.dmg` from [Releases](https://github.com/powcomnsw/lumen/releases/latest),
+1. **Install.** Download the `.dmg` from [Releases](https://github.com/powcomnsw/kickline/releases/latest),
    drag the app into Applications, then right-click it and choose **Open** the first time
    (it isn't signed by Apple yet; see [first launch](packaging/macos/INSTALL.txt)).
 2. **Setup guide.** It opens the first time: it finds your controller, asks what

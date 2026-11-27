@@ -132,6 +132,8 @@ pub struct DirectorSettings {
     pub off_palettes: Vec<String>,
     /// Groups Auto leaves alone.
     pub off_groups: Vec<String>,
+    /// Show mode: on launch and all night, keep output and Auto on and keep looking for the music.
+    pub show_mode: bool,
 }
 
 impl Default for DirectorSettings {
@@ -148,6 +150,7 @@ impl Default for DirectorSettings {
             off_looks: Vec::new(),
             off_palettes: Vec::new(),
             off_groups: Vec::new(),
+            show_mode: false,
         }
     }
 }
@@ -169,6 +172,8 @@ pub struct Input<'a> {
     pub drops: u32,
     /// What each group is for.
     pub roles: &'a crate::roles::RoleMap,
+    /// The music has gone quiet for good (the feed stalled or stopped): play a calm idle look.
+    pub idle: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -222,6 +227,7 @@ pub struct Director {
     pub look_name: String,
     /// Play this look now (a button in Set up asks for it).
     pub preview: Option<&'static str>,
+    idle: bool,
 }
 
 impl Default for Director {
@@ -245,6 +251,7 @@ impl Default for Director {
             impact_until: -1.0,
             look_name: String::new(),
             preview: None,
+            idle: false,
         }
     }
 }
@@ -501,7 +508,7 @@ impl Director {
         self.live += (inp.audio.get(AudioBand::Level) - self.live) * (dbeat as f32 * 0.5).min(1.0);
         let shift = (s.energy - 0.5) * 0.5 + s.genre.energy_shift();
         // The pause is dark whatever the (still fading) level says.
-        let target = if inp.section == Section::Pause { 0.04 } else { (0.7 * base_energy(inp.section, inp.beats_in) + 0.3 * self.live + shift).clamp(0.0, 1.0) };
+        let target = if inp.idle { 0.4 } else if inp.section == Section::Pause { 0.04 } else { (0.7 * base_energy(inp.section, inp.beats_in) + 0.3 * self.live + shift).clamp(0.0, 1.0) };
         self.mood = target;
         if instant {
             self.energy = target;
@@ -524,7 +531,13 @@ impl Director {
         if let Some(l) = self.preview.take().and_then(playbook::find) {
             self.apply_look(l, inp, auto, true, beat);
         }
-        let want_new = self.look.is_none() || stale || (changed && !self.hold) || (!self.hold && line && self.bars_in_look >= min_bars && long_section);
+        // The music has stopped for good: idle calmly rather than go dark.
+        let idle_changed = inp.idle != self.idle;
+        self.idle = inp.idle;
+        if idle_changed && inp.idle {
+            self.apply_look(&playbook::IDLE, inp, auto, false, beat);
+        }
+        let want_new = (idle_changed && !inp.idle) || (!inp.idle && (self.look.is_none() || stale || (changed && !self.hold) || (!self.hold && line && self.bars_in_look >= min_bars && long_section)));
         if want_new {
             if let Some(look) = self.pick_look(s, inp.section, inp.steady) {
                 self.apply_look(look, inp, auto, instant, beat);
@@ -619,13 +632,14 @@ mod tests {
         steady: bool,
         drops: u32,
         roles: crate::roles::RoleMap,
+        idle: bool,
     }
 
     impl Rig {
         fn new() -> Self {
             let mut d = Director::default();
             d.seed(7);
-            Rig { d, s: DirectorSettings { on: true, ..Default::default() }, auto: Vec::new(), pal: Palettes::default(), audio: AudioBands::default(), beat: 0.0, groups: Vec::new(), user: false, phrase: Default::default(), steady: true, drops: 0, roles: Default::default() }
+            Rig { d, s: DirectorSettings { on: true, ..Default::default() }, auto: Vec::new(), pal: Palettes::default(), audio: AudioBands::default(), beat: 0.0, groups: Vec::new(), user: false, phrase: Default::default(), steady: true, drops: 0, roles: Default::default(), idle: false }
         }
 
         /// Play `beats` beats of a section (20 steps a beat). Returns the effect names seen.
@@ -634,7 +648,7 @@ mod tests {
             for b in 0..beats * 20 {
                 self.audio.set(AudioBand::Level, 0.7);
                 self.phrase.update(self.beat, None, 4);
-                let inp = Input { audio: &self.audio, beat: self.beat, section, beats_in: b / 20, groups: &self.groups, user_playing: self.user, phrase: self.phrase, steady: self.steady, drops: self.drops, roles: &self.roles };
+                let inp = Input { audio: &self.audio, beat: self.beat, section, beats_in: b / 20, groups: &self.groups, user_playing: self.user, phrase: self.phrase, steady: self.steady, drops: self.drops, roles: &self.roles, idle: self.idle };
                 self.d.step(&self.s, &inp, &mut self.auto, &mut self.pal);
                 for (_, n) in &self.d.now {
                     if !n.is_empty() && !seen.contains(n) {
@@ -894,7 +908,7 @@ mod tests {
     fn self_step(r: &mut Rig, section: Section, beats_in: u32) {
         r.audio.set(AudioBand::Level, 0.7);
         r.phrase.update(r.beat, None, 4);
-        let inp = Input { audio: &r.audio, beat: r.beat, section, beats_in, groups: &r.groups, user_playing: r.user, phrase: r.phrase, steady: r.steady, drops: r.drops, roles: &r.roles };
+        let inp = Input { audio: &r.audio, beat: r.beat, section, beats_in, groups: &r.groups, user_playing: r.user, phrase: r.phrase, steady: r.steady, drops: r.drops, roles: &r.roles, idle: r.idle };
         r.d.step(&r.s, &inp, &mut r.auto, &mut r.pal);
         r.beat += 0.05;
     }
@@ -1039,5 +1053,41 @@ mod tests {
         };
         assert!((t("L") - t("R")).abs() > 1.0, "the right half is half a cycle behind");
         assert!(level_of(&r, "L", Role::Motion) > 0.0 && level_of(&r, "R", Role::Motion) > 0.0);
+    }
+
+    fn brightest(r: &Rig) -> f32 {
+        r.auto.iter().filter(|l| l.active.is_some()).map(|l| l.opacity).fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn when_the_music_stops_for_good_the_lights_idle_calmly_instead_of_going_dark() {
+        let mut r = Rig::new();
+        r.play(Section::Groove, 8);
+        r.idle = true;
+        r.play(Section::Pause, 12);
+        assert_eq!(r.d.look_name, "idle");
+        assert!(brightest(&r) > 0.12, "idle is dim but not dark: {}", brightest(&r));
+        assert!(brightest(&r) < 0.6, "and calm: {}", brightest(&r));
+    }
+
+    #[test]
+    fn idle_ends_when_the_music_returns() {
+        let mut r = Rig::new();
+        r.idle = true;
+        r.play(Section::Pause, 8);
+        assert_eq!(r.d.look_name, "idle");
+        r.idle = false;
+        r.play(Section::Groove, 8);
+        assert_ne!(r.d.look_name, "idle");
+        assert!(brightest(&r) > 0.3);
+    }
+
+    #[test]
+    fn an_ordinary_pause_is_still_dark() {
+        let mut r = Rig::new();
+        r.play(Section::Groove, 8);
+        r.play(Section::Pause, 8);
+        assert_ne!(r.d.look_name, "idle");
+        assert!(brightest(&r) < 0.12);
     }
 }

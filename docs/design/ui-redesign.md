@@ -1,6 +1,6 @@
 # Decluttering the screens: Play / Set up with an inspector
 
-Status: **agreed direction, not built yet** (decided 19 Nov 2026).
+Status: **built** (Play and Set up modes exist; decided 19 Nov 2026). Kept for the reasoning.
 
 The chosen design mixes the two mockups: Option A's separate **Play** and
 **Set up** modes, plus Option B's **inspector** (a settings panel for whatever

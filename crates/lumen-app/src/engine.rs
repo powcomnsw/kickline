@@ -76,6 +76,9 @@ pub struct Recorder {
     pub mark: u8,
 }
 
+/// How long the music must be silent before the lights idle (a real pause before a drop is a few seconds).
+const IDLE_AFTER_S: f64 = 12.0;
+
 pub struct Engine {
     pub comp: Composition,
     pub output: AdvancedOutput,
@@ -130,6 +133,13 @@ pub struct Engine {
     time_s: f64,
     seen_hits: [u64; 2],
     prev_section: Option<lumen_core::Section>,
+    /// Seconds since the music last made a sound.
+    quiet_s: f64,
+    quiet_hits: u64,
+    /// Times a tick panicked and the engine carried on.
+    pub panics: u32,
+    #[cfg(test)]
+    panic_next: bool,
 }
 
 impl Engine {
@@ -174,6 +184,11 @@ impl Engine {
             time_s: 0.0,
             seen_hits: [0; 2],
             prev_section: None,
+            quiet_s: 0.0,
+            quiet_hits: 0,
+            panics: 0,
+            #[cfg(test)]
+            panic_next: false,
         }
     }
 
@@ -233,6 +248,40 @@ impl Engine {
             .clamp(0.0, 0.2);
         self.last_tick = now;
         self.step(dt, woke_by_hit, now);
+    }
+
+    /// Show mode: keep the night going. Output and Auto stay on, and it says
+    /// whether the music source needs reopening. Does nothing when show mode is off.
+    pub fn keep_show_going(&mut self) -> bool {
+        if !self.comp.director.show_mode {
+            return false;
+        }
+        self.output_enabled = true;
+        self.comp.director.on = true;
+        matches!(self.audio, AudioSource::Off)
+    }
+
+    /// A tick that survives a panic: the engine logs it, clears what Auto was
+    /// doing and carries on next tick, so one bad frame never ends the night.
+    /// Returns false if it panicked.
+    pub fn tick_guarded(&mut self, woke_by_hit: bool) -> bool {
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            #[cfg(test)]
+            if std::mem::take(&mut self.panic_next) {
+                panic!("test panic");
+            }
+            self.tick(woke_by_hit)
+        }))
+        .is_ok();
+        if !ok {
+            self.panics += 1;
+            log::error("engine", format!("The engine hit an error and restarted its show state ({} so far); the lights carry on.", self.panics));
+            self.comp.director_rt = Default::default();
+            self.comp.auto.clear();
+            self.last_tick = Instant::now();
+            self.last_send = Instant::now();
+        }
+        ok
     }
 
     /// One tick of `dt` seconds (the real one, or a made-up one in tests).
@@ -373,8 +422,17 @@ impl Engine {
     }
 
     /// Hand the analysis to the composition, now the clock is decided.
-    fn update_audio(&mut self, _dt: f64) {
+    fn update_audio(&mut self, dt: f64) {
         self.metrics.sample_audio(&self.audio);
+        // Fail soft: a feed that has gone silent for a while is idle, not a pause.
+        let hits: u64 = self.bands.hits.iter().sum();
+        if self.bands.get(lumen_core::AudioBand::Level) > 0.03 || hits != self.quiet_hits {
+            self.quiet_s = 0.0;
+        } else {
+            self.quiet_s += dt;
+        }
+        self.quiet_hits = hits;
+        self.comp.idle = self.quiet_s > IDLE_AFTER_S;
         self.comp.set_audio(self.bands);
         self.bands = self.comp.audio; // includes Beat/Bar from the clock
         if let Some(r) = &mut self.recorder {
@@ -851,7 +909,7 @@ fn run(engine: Arc<Mutex<Engine>>) {
                 e = e2;
             }
         }
-        e.tick(woke);
+        e.tick_guarded(woke);
     }
 }
 
@@ -1117,5 +1175,119 @@ mod tests {
 
     fn e_wake(eng: &Arc<Mutex<Engine>>) {
         eng.lock().unwrap().wake.notify();
+    }
+
+    #[test]
+    fn a_silent_feed_idles_and_the_music_returning_ends_it() {
+        let mut comp = Composition::new(32, 16, 6);
+        comp.director.on = true;
+        let mut e = Engine::new(comp, AdvancedOutput::demo());
+        let t0 = Instant::now();
+        for _ in 0..(44 * 8) {
+            e.step(1.0 / 44.0, false, t0);
+        }
+        assert!(!e.comp.idle, "8 s of quiet is still just quiet");
+        for _ in 0..(44 * 8) {
+            e.step(1.0 / 44.0, false, t0);
+        }
+        assert!(e.comp.idle, "16 s of nothing is idle");
+        e.start_demo_audio();
+        for _ in 0..(44 * 3) {
+            e.step(1.0 / 44.0, false, t0);
+        }
+        assert!(!e.comp.idle, "the music is back");
+    }
+
+    #[test]
+    fn a_panicking_tick_is_logged_and_the_engine_carries_on() {
+        let mut comp = Composition::new(32, 16, 6);
+        comp.director.on = true;
+        let mut e = Engine::new(comp, AdvancedOutput::demo());
+        e.start_demo_audio();
+        for _ in 0..50 {
+            e.step(1.0 / 44.0, false, Instant::now());
+        }
+        e.panic_next = true;
+        assert!(!e.tick_guarded(false));
+        assert_eq!(e.panics, 1);
+        // Next ticks are fine and Auto rebuilds itself.
+        for _ in 0..50 {
+            assert!(e.tick_guarded(false));
+        }
+        assert!(!e.comp.auto.is_empty());
+    }
+
+    #[test]
+    fn show_mode_turns_output_and_auto_on_and_asks_for_the_music() {
+        let mut e = Engine::new(Composition::new(32, 16, 6), AdvancedOutput::demo());
+        assert!(!e.keep_show_going() && !e.output_enabled && !e.comp.director.on, "off means hands off");
+        e.comp.director.show_mode = true;
+        assert!(e.keep_show_going(), "no music source yet");
+        assert!(e.output_enabled && e.comp.director.on);
+        e.start_demo_audio();
+        assert!(!e.keep_show_going(), "music is playing");
+        // An old show file has no show mode.
+        let old: lumen_core::DirectorSettings = serde_json::from_str("{\"on\":true}").unwrap();
+        assert!(!old.show_mode);
+    }
+
+    /// Runs a show headless, faster than real time, and checks that nothing
+    /// grows, goes bad or falls over. `minutes` of music at 44 ticks a second.
+    fn soak(minutes: usize) -> (f64, usize) {
+        let mut times: Vec<f64> = Vec::new();
+        let p = crate::stage::example_show();
+        let mut e = Engine::new(p.composition, p.output);
+        e.comp.director.on = true;
+        e.start_demo_audio();
+        let t0 = Instant::now();
+        let (mut worst_ms, mut auto_len) = (0.0f64, 0usize);
+        let mut shapes = std::collections::BTreeSet::new();
+        for k in 0..(minutes * 60 * 44) {
+            let t = Instant::now();
+            e.step(1.0 / 44.0, false, t0);
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            if ms > 5.0 && std::env::var("SOAK_TRACE").is_ok() {
+                eprintln!("slow tick {k}: {ms:.1} ms, section {:?}, look {}, idle {}", e.comp.sections.current(), e.comp.director_rt.look_name, e.comp.idle);
+            }
+            worst_ms = worst_ms.max(ms);
+            times.push(ms);
+            assert!(e.comp.bpm.is_finite() && e.comp.beat.is_finite() && e.comp.bpm > 20.0 && e.comp.bpm < 400.0, "tempo went bad at tick {k}: {} / {}", e.comp.bpm, e.comp.beat);
+            assert!(e.comp.director_rt.energy.is_finite());
+            if k % 441 == 0 {
+                auto_len = e.comp.auto.len();
+                shapes.insert(auto_len);
+            }
+            // Pretend the feed drops out now and then: the show must idle and recover.
+            if k % (44 * 90) == 44 * 80 {
+                e.audio = AudioSource::Off;
+            }
+            if k % (44 * 90) == 44 * 85 {
+                e.start_demo_audio();
+            }
+        }
+        assert_eq!(e.panics, 0);
+        assert!(shapes.len() <= 2, "Auto's layers keep changing shape: {shapes:?}");
+        // Judge the 99.9th percentile, not the single worst tick: a shared machine
+        // stalls for a few ms now and then whatever the engine does.
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let p999 = times[(times.len() as f64 * 0.999) as usize - 1];
+        eprintln!("soak: {} ticks, median {:.2} ms, 99.9% {:.2} ms, worst {:.1} ms", times.len(), times[times.len() / 2], p999, worst_ms);
+        (p999, auto_len)
+    }
+
+    #[test]
+    fn a_short_soak_stays_healthy() {
+        soak(2);
+    }
+
+    /// Hours-long set, run in release by CI: `cargo test --release -p lumen-app soak_long -- --ignored`.
+    #[test]
+    #[ignore]
+    fn soak_long() {
+        let minutes = std::env::var("SOAK_MINUTES").ok().and_then(|m| m.parse().ok()).unwrap_or(180);
+        let (worst, _) = soak(minutes);
+        if !cfg!(debug_assertions) {
+            assert!(worst < 5.0, "99.9% of ticks should take under 5 ms, but the 99.9th percentile is {worst:.2} ms");
+        }
     }
 }

@@ -268,6 +268,35 @@ impl State {
     }
 }
 
+/// The answer to "am I ready to play?": ready or not, and the one thing to fix.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Verdict {
+    pub ready: bool,
+    pub fix: Option<String>,
+}
+
+/// Judge a set of checks plus the live state of the show. The first failure
+/// is the thing to fix; warnings leave you ready but are named.
+pub fn verdict(checks: &[Check], output_on: bool, music_on: bool, auto_on: bool) -> Verdict {
+    let text = |c: &Check| match &c.hint {
+        Some(h) => format!("{}: {} {}", c.name, c.detail, h),
+        None => format!("{}: {}", c.name, c.detail),
+    };
+    if let Some(c) = checks.iter().find(|c| c.status == Status::Fail) {
+        return Verdict { ready: false, fix: Some(text(c)) };
+    }
+    if !output_on {
+        return Verdict { ready: false, fix: Some("DMX output is off. Switch it on (top bar).".into()) };
+    }
+    if !music_on {
+        return Verdict { ready: false, fix: Some("No music source. Pick one in Set up → Music (or play something in rekordbox).".into()) };
+    }
+    if !auto_on {
+        return Verdict { ready: true, fix: Some("Auto is off: you're playing the lights by hand.".into()) };
+    }
+    Verdict { ready: true, fix: checks.iter().find(|c| c.status == Status::Warn).map(text) }
+}
+
 // ---------------------------------------------------------------- checks
 
 fn system_checks(app: &View) -> Vec<Check> {
@@ -1194,6 +1223,20 @@ pub fn export(app: &mut View) -> Result<PathBuf, String> {
 
 // ---------------------------------------------------------------- UI
 
+fn ready_ui(app: &mut View, ui: &mut egui::Ui) {
+    let t = crate::theme::current();
+    let v = verdict(&app.diag.checks, app.e.output_enabled, !matches!(app.e.audio, crate::engine::AudioSource::Off), app.e.comp.director.on);
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let (mark, colour, word) = if v.ready { ("✔", t.ok, "Ready to play") } else { ("✖", t.err, "Not ready") };
+        ui.label(RichText::new(format!("{mark} {word}")).color(colour).font(crate::theme::bold(t.text_size + 2.0)));
+        if let Some(f) = &v.fix {
+            ui.label(RichText::new(f).color(t.weak));
+        }
+    });
+    ui.add_space(4.0);
+}
+
 pub fn ui(app: &mut View, ui: &mut egui::Ui) {
     // Wait a few seconds after launch so frame-rate and audio numbers mean something.
     if !app.diag.ran_once {
@@ -1237,6 +1280,7 @@ pub fn ui(app: &mut View, ui: &mut egui::Ui) {
             ui.weak("copied");
         }
     });
+    ready_ui(app, ui);
     record_ui(app, ui);
     if let Some(p) = app.diag.last_export.clone() {
         ui.horizontal(|ui| {
@@ -1374,3 +1418,40 @@ fn save_recording(rec: &lumen_core::recording::Recording) -> Result<PathBuf, Str
     log::info("recording", format!("saved {}", path.display()));
     Ok(path)
 }
+
+#[cfg(test)]
+mod ready_tests {
+    use super::*;
+
+    fn c(status: Status, name: &str) -> Check {
+        check("Network", name, status, "detail")
+    }
+
+    #[test]
+    fn a_failed_check_is_the_one_thing_to_fix() {
+        let v = verdict(&[c(Status::Pass, "a"), c(Status::Fail, "Controller found"), c(Status::Fail, "later")], true, true, true);
+        assert!(!v.ready);
+        assert!(v.fix.unwrap().starts_with("Controller found"));
+    }
+
+    #[test]
+    fn output_off_or_no_music_means_not_ready() {
+        assert!(!verdict(&[], false, true, true).ready);
+        let v = verdict(&[], true, false, true);
+        assert!(!v.ready && v.fix.unwrap().contains("music"));
+    }
+
+    #[test]
+    fn all_well_is_ready_with_nothing_to_fix() {
+        assert_eq!(verdict(&[c(Status::Pass, "a")], true, true, true), Verdict { ready: true, fix: None });
+    }
+
+    #[test]
+    fn warnings_and_manual_play_are_named_but_still_ready() {
+        let v = verdict(&[c(Status::Warn, "Wi-Fi")], true, true, true);
+        assert!(v.ready && v.fix.unwrap().starts_with("Wi-Fi"));
+        let v = verdict(&[], true, true, false);
+        assert!(v.ready && v.fix.unwrap().contains("by hand"));
+    }
+}
+

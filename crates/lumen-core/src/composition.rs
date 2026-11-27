@@ -112,6 +112,9 @@ pub struct Composition {
     /// What each group is for (set by the engine from the stage).
     #[serde(skip)]
     pub auto_roles: crate::roles::RoleMap,
+    /// The music has stopped for good (set by the engine).
+    #[serde(skip)]
+    pub idle: bool,
     /// Brightness from the current section's look (1 when looks are off).
     #[serde(skip, default = "one")]
     pub look_level: f32,
@@ -156,6 +159,7 @@ impl Composition {
             director_rt: Director::default(),
             auto_groups: Vec::new(),
             auto_roles: Default::default(),
+            idle: false,
             look_level: 1.0,
             beat: 0.0,
             analysis_beat: 0.0,
@@ -347,6 +351,7 @@ impl Composition {
             steady: self.steady,
             drops: self.memory.drops,
             roles: &self.auto_roles,
+            idle: self.idle,
         };
         self.director_rt.step(&self.director, &input, &mut self.auto, &mut self.palettes);
     }

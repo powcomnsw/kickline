@@ -148,6 +148,8 @@ pub fn page(v: &mut View, ui: &mut egui::Ui) {
             });
             ui.checkbox(&mut v.e.comp.director.flash_safe, "Flash-safe: never use strobing effects");
             ui.checkbox(&mut v.e.comp.director.palettes, "Let Auto change the colour palette");
+            ui.checkbox(&mut v.e.comp.director.show_mode, "Show mode: keep output and Auto on all night, and keep looking for the music")
+                .on_hover_text("Saved with the show. When the app opens it switches output and Auto on and keeps trying to find your last music source (for example rekordbox) until it does.");
         });
         let groups = v.e.output.group_names();
         section_box(ui, "Groups", |ui| {
